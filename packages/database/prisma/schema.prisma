@@ -1,0 +1,88 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = "postgresql://batia:batia_password@localhost:5432/batia"
+}
+
+model Host {
+  id           String        @id @default(cuid())
+  name         String
+  tiktokHandle String        @unique
+  sessions     LiveSession[]
+}
+
+model LiveSession {
+  id        String       @id @default(cuid())
+  hostId    String
+  host      Host         @relation(fields: [hostId], references: [id])
+  mode      String       @default("REGULAR")
+  status    String       @default("LIVE")
+  comments  CommentLog[]
+  gifts     GiftLog[]
+  scripts   ScriptItem[]
+}
+
+model Product {
+  id    String @id @default(cuid())
+  title String
+  skus  Sku[]
+}
+
+model Sku {
+  id        String  @id @default(cuid())
+  productId String
+  product   Product @relation(fields: [productId], references: [id])
+  skuCode   String  @unique
+  price     Float
+  stock     Int     @default(0)
+}
+
+model ScriptItem {
+  id        String      @id @default(cuid())
+  sessionId String
+  session   LiveSession @relation(fields: [sessionId], references: [id])
+  type      String
+  content   String
+  status    String      @default("QUEUED")
+}
+
+model CommentLog {
+  id        String      @id @default(cuid())
+  sessionId String
+  session   LiveSession @relation(fields: [sessionId], references: [id])
+  username  String
+  text      String
+  intent    String?
+  createdAt DateTime    @default(now())
+}
+
+model GiftLog {
+  id        String      @id @default(cuid())
+  sessionId String
+  session   LiveSession @relation(fields: [sessionId], references: [id])
+  username  String
+  giftName  String
+  giftValue Int
+}
+
+model ViewerMemory {
+  id           String @id @default(cuid())
+  tiktokUserId String @unique
+  username     String
+  isVip        Boolean @default(false)
+}
+
+model ViolationLog {
+  id            String   @id @default(cuid())
+  ruleId        String
+  triggeredText String
+  action        String
+  resolvedText  String?
+  humanResolved Boolean  @default(false)
+  createdAt     DateTime @default(now())
+}
+
+

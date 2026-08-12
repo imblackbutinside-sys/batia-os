@@ -1,0 +1,51 @@
+meta:
+  version: "2026.08"
+  market: "MY"
+
+regular_live:
+  forbidden_behaviors:
+    - id: begging_gifts
+      desc: Mengemis atau menekan penonton beri gift
+      severity: HIGH
+      banned_phrases_regex:
+        - "(bagi|kasi|sedekah).*(gift|lion|universe|cendol)"
+        - "target.*(lion|gift|universe)"
+        - "sapa sayang.*(gift|share)"
+    - id: financial_engagement_bait
+      desc: Pancing komen guna wang
+      severity: CRITICAL
+      banned_phrases_regex:
+        - "komen.*(nak|mahu).*(RM|ringgit|duit|wang)"
+        - "share.*(dapat|menang).*(RM|duit)"
+        - "RM[0-9,]+.*(kalau|jika)"
+    - id: forced_action_bait
+      desc: Memaksa follow atau share
+      severity: MEDIUM
+      banned_phrases_regex:
+        - "wajib (follow|share)"
+        - "tekan share kalau sayang"
+
+shoppable_live:
+  product_claims:
+    - id: medical_health_claims
+      desc: Tuntutan perubatan tanpa NPRA
+      severity: CRITICAL
+      banned_phrases_regex:
+        - "(confirm|pasti|jamin).*(sembuh|hilang).*(penyakit|jerawat)"
+        - "(putih|kurus).*(dalam|[0-9]+ (hari|minggu))"
+  traffic:
+    - id: off_platform_redirect
+      desc: Lencong trafik keluar TikTok
+      severity: CRITICAL
+      banned_phrases_regex:
+        - "(shopee|lazada|instagram|whatsapp|telegram|link di bio)"
+
+enforcement:
+  CRITICAL:
+    action: BLOCK_AND_HOLD
+  HIGH:
+    action: AUTO_REWRITE_THEN_HOLD
+  MEDIUM:
+    action: AUTO_REWRITE_AUTO_SEND
+  LOW:
+    action: AUTO_SEND
