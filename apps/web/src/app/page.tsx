@@ -18,7 +18,16 @@ export default function Dashboard() {
   const [stats, setStats] = useState({ viewers: 0, totalLikes: 0, comments: 0, gifts: 0 });
   const [vips, setVips] = useState<string[]>([]);
   useEffect(() => {
-    socket.on(WS_EVENTS.AUDIO_ROUTE, (d: any) => setSpeaker(d.label));
+    socket.on(WS_EVENTS.AUDIO_ROUTE, (d: any) => {
+      setSpeaker(d.label);
+      localStorage.setItem("batia_speaker", d.id === socket.id ? "1" : "0");
+    });
+    socket.on("connect", () => {
+      if (localStorage.getItem("batia_speaker") === "1") {
+        const label = /Mobi|Android/i.test(navigator.userAgent) ? "PHONE" : "LAPTOP";
+        socket.emit(WS_EVENTS.AUDIO_CLAIM, { label });
+      }
+    });
   }, []);
   useEffect(() => {
     socket.on(WS_EVENTS.LIVE_STATS, (d: any) => setStats(d));
@@ -29,6 +38,7 @@ export default function Dashboard() {
   }, []);
   const claimAudio = () => {
     const label = /Mobi|Android/i.test(navigator.userAgent) ? "PHONE" : "LAPTOP";
+    localStorage.setItem("batia_speaker", "1");
     socket.emit(WS_EVENTS.AUDIO_CLAIM, { label });
   };
   const [ttUser, setTtUser] = useState("");
@@ -124,13 +134,13 @@ export default function Dashboard() {
         <span className={"text-xs px-2 py-1 rounded " + (ttStatus.startsWith("CONNECTED") ? "bg-green-700" : "bg-gray-700")}>{ttStatus}</span>
       </div>
       <div className="mb-3 bg-gray-900 rounded p-4 flex items-center gap-6 text-sm">
-        <span>👥 Viewers: <b>{stats.viewers}</b></span>
-        <span>❤️ Likes: <b>{stats.totalLikes}</b></span>
-        <span>💬 Komen: <b>{stats.comments}</b></span>
-        <span>🎁 Gifts: <b>{stats.gifts}</b></span>
+        <span>{"\uD83D\uDC65"} Viewers: <b>{stats.viewers}</b></span>
+        <span>{"\u2764\uFE0F"} Likes: <b>{stats.totalLikes}</b></span>
+        <span>{"\uD83D\uDCAC"} Komen: <b>{stats.comments}</b></span>
+        <span>{"\uD83C\uDF81"} Gifts: <b>{stats.gifts}</b></span>
       </div>
       <div className="mb-6 bg-gray-900 rounded p-4 text-sm">
-        <span className="font-semibold">👑 Penonton VIP:</span>
+        <span className="font-semibold">{"\uD83D\uDC51"} Penonton VIP:</span>
         {vips.length === 0 ? <span className="text-gray-500 ml-2">belum ada lagi</span> : vips.map((v) => <span key={v} className="ml-2 px-2 py-1 bg-yellow-700 rounded">{v}</span>)}
       </div>
 
@@ -230,6 +240,7 @@ export default function Dashboard() {
     </div>
   );
 }
+
 
 
 

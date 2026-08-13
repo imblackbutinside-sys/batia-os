@@ -38,11 +38,13 @@ export class TikTokAdapter {
       } catch (e) {}
     });
 
-    this.conn.on("roomUser", (data: any) => {
+    const onRoom = (data: any) => {
       try {
-        handlers.onViewer(Number(data.viewerCount || data.totalUserCount || data.userCount || 0));
+        const c = Number(data.viewerCount || data.totalUserCount || data.userCount || data.memberCount || data.count || 0);
+        if (c > 0) handlers.onViewer(c);
       } catch (e) {}
-    });
+    };
+    ["roomUser", "room_user", "member", "liveIntro", "roomMessage", "social"].forEach((ev) => this.conn.on(ev, onRoom));
 
     this.conn.on("gift", (data: any) => {
       try {
@@ -85,3 +87,4 @@ export class TikTokAdapter {
     this.connected = false;
   }
 }
+
