@@ -134,10 +134,7 @@ async function processGift(username: string, giftName: string, giftValue: number
 
 io.on("connection", (socket) => {
   console.log("[WS] client connected:", socket.id);
-  if (!audioSink) {
-    audioSink = { id: socket.id, label: "LAPTOP" };
-    io.emit(WS_EVENTS.AUDIO_ROUTE, audioSink);
-  }
+  if (!audioSink) audioSink = { id: socket.id, label: "LAPTOP" };
   socket.on(WS_EVENTS.AUDIO_CLAIM, (data: { label: string }) => {
     audioSink = { id: socket.id, label: data.label };
     console.log("[WS] audio sink ->", data.label);
@@ -193,4 +190,3 @@ io.on("connection", (socket) => {
 httpServer.listen(PORT, () => {
   console.log("BATIA Orchestrator on http://localhost:" + PORT);
 });
-

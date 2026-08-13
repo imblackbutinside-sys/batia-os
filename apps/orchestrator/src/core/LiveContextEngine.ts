@@ -1,4 +1,4 @@
-import { classifyComment, routeAIRequest, rewriteForCompliance } from "../router/AIRouter.js";
+import { classifyComment, routeAIRequest, rewriteForCompliance, generateBilingualResponse } from "../router/AIRouter.js";
 import { findProducts, formatCatalogForAI } from "../catalog/ProductCatalog.js";
 import { trackViewer } from "../memory/ViewerMemory.js";
 import { PolicyEngine, PolicyViolation } from "../policy/PolicyEngine.js";
@@ -101,11 +101,9 @@ export class LiveContextEngine {
       ]);
       response = r.content;
     } else {
-      const r = await routeAIRequest("CHITCHAT", [
-        { role: "system", content: PERSONA + " " + context },
-        { role: "user", content: username + " kata: " + text },
-      ]);
-      response = r.content;
+      const r = await generateBilingualResponse(text, PERSONA + " " + context);
+      console.log("[ENGINE] lang=" + r.lang + " for:", text.slice(0, 40));
+      response = r.text;
     }
     return { response, violations, approvalRequest: null };
   }

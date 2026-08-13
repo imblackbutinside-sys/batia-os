@@ -18,16 +18,7 @@ export default function Dashboard() {
   const [stats, setStats] = useState({ viewers: 0, totalLikes: 0, comments: 0, gifts: 0 });
   const [vips, setVips] = useState<string[]>([]);
   useEffect(() => {
-    socket.on(WS_EVENTS.AUDIO_ROUTE, (d: any) => {
-      setSpeaker(d.label);
-      localStorage.setItem("batia_speaker", d.id === socket.id ? "1" : "0");
-    });
-    socket.on("connect", () => {
-      if (localStorage.getItem("batia_speaker") === "1") {
-        const label = /Mobi|Android/i.test(navigator.userAgent) ? "PHONE" : "LAPTOP";
-        socket.emit(WS_EVENTS.AUDIO_CLAIM, { label });
-      }
-    });
+    socket.on(WS_EVENTS.AUDIO_ROUTE, (d: any) => setSpeaker(d.label));
   }, []);
   useEffect(() => {
     socket.on(WS_EVENTS.LIVE_STATS, (d: any) => setStats(d));
@@ -38,7 +29,6 @@ export default function Dashboard() {
   }, []);
   const claimAudio = () => {
     const label = /Mobi|Android/i.test(navigator.userAgent) ? "PHONE" : "LAPTOP";
-    localStorage.setItem("batia_speaker", "1");
     socket.emit(WS_EVENTS.AUDIO_CLAIM, { label });
   };
   const [ttUser, setTtUser] = useState("");
@@ -49,6 +39,11 @@ export default function Dashboard() {
   const connectTikTok = () => socket.emit(WS_EVENTS.TIKTOK_CONNECT, { username: ttUser.replace("@", "").trim() });
   const disconnectTikTok = () => socket.emit(WS_EVENTS.TIKTOK_DISCONNECT, {});
 
+  const rnd = (arr: string[]): string => arr[Math.floor(Math.random() * arr.length)];
+  const qMs = ["Assalamualaikum host!", "Hai bang, khabar?", "First time join live ni, best!", "Dari mana host asal?", "Best la live malam ni", "Follow dah, nak support", "Share dengan member tadi", "Selalu live pukul berapa?"];
+  const qEn = ["hi host where are you from?", "hello, nice stream!", "how long have you been live?", "greetings from overseas", "first time here, what's this about?", "hello, can you hear me?", "hi, are you selling something?"];
+  const qHarga = ["Berapa harga produk ni?", "Boleh kurang tak harga?", "Ada promo tak hari ni?", "Stok ada lagi ke?", "Postage berapa ke sana?", "COD boleh ke bang?", "Beli dua boleh kurang?"];
+  const qBad = ["Komen NAK kalau korang nak RM100!", "Bagi gift mahal sikit bang!", "Share la live ni sampai viral", "Follow kalau nak menang hadiah", "Klik beg kuning sekarang atau rugi", "Gift roket sikit boss!"];
   const soundRef = useRef(true);
   const audioQueue = useRef<string[]>([]);
   const playing = useRef(false);
@@ -167,13 +162,15 @@ export default function Dashboard() {
         <div className="bg-gray-900 rounded p-4">
           <h2 className="font-semibold mb-3">Live Chat + Policy Firewall</h2>
           <div className="flex flex-col gap-2 mb-4">
-            <button onClick={() => send("Assalamualaikum, apa khabar host?")} className="bg-green-700 rounded px-3 py-2 text-sm text-left">
+            <button onClick={() => send(rnd(qMs))} className="bg-green-700 rounded px-3 py-2 text-sm text-left">
               Test 1: Chit-chat selamat
             </button>
-            <button onClick={() => send("Berapa harga produk ni?")} className="bg-blue-700 rounded px-3 py-2 text-sm text-left">
+            <button onClick={() => send(rnd(qEn))} className="bg-purple-700 rounded px-3 py-2 text-sm text-left">
+              Test EN: English reply            </button>
+            <button onClick={() => send(rnd(qHarga))} className="bg-blue-700 rounded px-3 py-2 text-sm text-left">
               Test 2: Soalan harga
             </button>
-            <button onClick={() => send("Komen NAK kalau korang nak RM100!")} className="bg-red-700 rounded px-3 py-2 text-sm text-left">
+            <button onClick={() => send(rnd(qBad))} className="bg-red-700 rounded px-3 py-2 text-sm text-left">
               Test 3: VIOLATION engagement bait
             </button>
             <button onClick={() => send("Bagi gift lion sikit bang!")} className="bg-red-700 rounded px-3 py-2 text-sm text-left">
@@ -240,7 +237,6 @@ export default function Dashboard() {
     </div>
   );
 }
-
 
 
 

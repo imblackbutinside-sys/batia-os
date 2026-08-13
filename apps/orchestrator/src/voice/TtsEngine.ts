@@ -29,6 +29,12 @@ const USERNAME_FIX: Array<[RegExp, string]> = [
   [/_/g, " "],
 ];
 
+const PRONUNCIATION_FIX: Array<[RegExp, string]> = [
+  [/\bMalaysia\b/gi, "Mah-lay-see-ah"],
+  [/\bMalaysian\b/gi, "Mah-lay-see-an"],
+  [/\bTikTok\b/gi, "Tick Tock"],
+];
+
 function casualize(text: string): string {
   let out = text;
   for (const [re, rep] of USERNAME_FIX) out = out.replace(re, rep);
@@ -36,66 +42,65 @@ function casualize(text: string): string {
   return out.replace(/\s+/g, " ").trim();
 }
 
-const VOICE_CHAIN = [
-  { voice: "ms-MY-YasminNeural", label: "Yasmin (MS)" },
-  { voice: "ms-MY-OsmanNeural", label: "Osman (MS)" },
-  { voice: "id-ID-GadisNeural", label: "Gadis (ID-fallback)" },
-  { voice: "en-SG-WayneNeural", label: "Wayne (SG-EN)" },
-];
+function englishize(text: string): string {
+  let out = text;
+  for (const [re, rep] of PRONUNCIATION_FIX) out = out.replace(re, rep);
+  return out;
+}
+
+function detectLang(text: string): "MS" | "EN" {
+  const ms = (text.match(/\b(tak|takde|nak|je|jom|korang|apa|macam|mana|kenapa|dah|ni|tu|kat|kita|saya|awak|aku|kamu|boleh|khabar|assalamualaikum|waalaikumussalam|santai|borak|cerita|harga|stok|beli|cantik|bang|kak|abang|malam|hari|esok|best|syok|memang|betul|kan|dengan|untuk|yang|dan|sila|maaf|lah|wei|woi|geng|member|lepak)\b/gi) || []).length;
+  const words = Math.max(1, text.trim().split(/\s+/).length);
+  return ms / words >= 0.1 ? "MS" : "EN";
+}
+
+const EN_VOICE: Record<string, string> = {
+  "ms-MY-YasminNeural": "en-US-JennyNeural",
+  "ms-MY-OsmanNeural": "en-US-GuyNeural",
+};
 
 export class TtsEngine {
-  private instances: any[] = [];
-  private voiceIdx = 0;
+  private instances: Record<string, any> = {};
+  private voice: string;
   private dir: string;
 
   constructor() {
+    this.voice = process.env.EDGE_TTS_VOICE || "ms-MY-YasminNeural";
     this.dir = path.join(process.cwd(), "audio");
     fs.mkdirSync(this.dir, { recursive: true });
-    this.getInstance(0).then(() => console.log("[TTS] ready:", VOICE_CHAIN[0].label)).catch((e) => console.error("[TTS] disabled:", e));
+    this.getInstance(this.voice).then(() => console.log("[TTS] ready:", this.voice)).catch((e) => console.error("[TTS] disabled:", e));
   }
 
-  private async getInstance(i: number): Promise<any> {
-    if (!this.instances[i]) {
+  private async getInstance(voice: string): Promise<any> {
+    if (!this.instances[voice]) {
       const mod: any = await import("node-edge-tts");
       const EdgeTTS = mod.EdgeTTS || (mod.default && mod.default.EdgeTTS) || mod.default;
-      this.instances[i] = new EdgeTTS({ voice: VOICE_CHAIN[i].voice, timeout: 8000 });
+      this.instances[voice] = new EdgeTTS({ voice, timeout: 10000 });
     }
-    return this.instances[i];
+    return this.instances[voice];
   }
 
-  async setVoice(input: string) {
-    const low = input.toLowerCase();
-    const idx = VOICE_CHAIN.findIndex((v) =>
-      low.includes(v.voice.toLowerCase()) ||
-      v.voice.toLowerCase().includes(low) ||
-      low.includes(v.label.split(" ")[0].toLowerCase())
-    );
-    if (idx >= 0) {
-      this.voiceIdx = idx;
-      console.log("[TTS] voice switched to:", VOICE_CHAIN[idx].label);
-      try { await this.getInstance(idx); } catch (e) {}
-    }
+  async setVoice(voice: string) {
+    this.voice = voice;
+    try { await this.getInstance(voice); console.log("[TTS] voice switched to:", voice); } catch (e) {}
   }
 
   async speak(text: string): Promise<string | null> {
-    const casual = casualize(text);
-    console.log("[TTS] casual:", casual);
-    const clean = casual.replace(/[^\p{L}\p{N}\s.,!?'-]/gu, "");
+    const lang = detectLang(text);
+    const voice = lang === "EN" ? (EN_VOICE[this.voice] || "en-US-JennyNeural") : this.voice;
+    const spoken = lang === "MS" ? casualize(text) : englishize(text);
+    console.log("[TTS] lang=" + lang + " voice=" + voice + ":", spoken.slice(0, 80));
+    const clean = spoken.replace(/[^\p{L}\p{N}\s.,!?'-]/gu, "");
     const id = "a" + Date.now();
     const file = path.join(this.dir, id + ".mp3");
-    for (let i = 0; i < VOICE_CHAIN.length; i++) {
-      const idx = (this.voiceIdx + i) % VOICE_CHAIN.length;
-      try {
-        const tts = await this.getInstance(idx);
-        await tts.ttsPromise(clean, file);
-        console.log("[TTS] success with:", VOICE_CHAIN[idx].label);
-        return "http://localhost:4000/audio/" + id + ".mp3";
-      } catch (e) {
-        console.warn("[TTS] fail " + VOICE_CHAIN[idx].label + " -> next");
-        this.instances[idx] = null;
-      }
+    try {
+      const tts = await this.getInstance(voice);
+      await tts.ttsPromise(clean, file);
+      return "http://localhost:4000/audio/" + id + ".mp3";
+    } catch (e) {
+      console.error("[TTS] speak error:", e);
+      this.instances[voice] = null;
+      return null;
     }
-    console.error("[TTS] all voices failed");
-    return null;
   }
 }

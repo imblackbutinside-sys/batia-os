@@ -96,3 +96,25 @@ export async function rewriteForCompliance(originalText: string, violationType: 
   return r.content;
 }
 
+
+function detectLang(text: string): "MS" | "EN" {
+  const ms = (text.match(/\b(tak|takde|nak|je|jom|korang|apa|macam|mana|kenapa|dah|ni|tu|kat|kita|saya|awak|aku|kamu|boleh|khabar|assalamualaikum|waalaikumussalam|santai|borak|cerita|harga|stok|beli|cantik|bang|kak|abang|malam|hari|esok|best|syok|memang|betul|kan|dengan|untuk|yang|dan|sila|maaf|lah|wei|woi|geng|member|lepak|bukan|sangat|juga|sama|dari|oleh|atau|jika|bila|sini|situ|tadi|baru|sudah|belum|masih|sedang|pernah|tidak|adakah)\b/gi) || []).length;
+  const words = Math.max(1, text.trim().split(/\s+/).length);
+  return ms / words >= 0.2 ? "MS" : "EN";
+}
+
+export async function generateBilingualResponse(userComment: string, hostContext: string): Promise<{ text: string; lang: "MS" | "EN" }> {
+  const lang = detectLang(userComment);
+  if (lang === "EN") {
+    const r = await routeAIRequest("CHITCHAT", [
+      { role: "system", content: "You are BATIA, a friendly Malaysian TikTok live host. IMPORTANT: ALWAYS reply in ENGLISH only, never Malay. Natural casual English, warm, ONE short sentence only (max 20 words). If asked about location, say Malaysia." },
+      { role: "user", content: "Viewer comment: " + userComment },
+    ]);
+    return { text: r.content, lang: "EN" };
+  }
+  const r = await routeAIRequest("CHITCHAT", [
+    { role: "system", content: "Anda ialah BATIA, host TikTok Malaysia. Jawab Bahasa Melayu pasar MALAYSIA (BUKAN Indonesia). Santai, 1-2 ayat. Guna: korang, takde, je, jom, best. ELAK: kalian, berbagi, konten, anda, mari kita." },
+    { role: "user", content: "Komen penonton: " + userComment + "\nKonteks: " + hostContext },
+  ]);
+  return { text: r.content, lang: "MS" };
+}
