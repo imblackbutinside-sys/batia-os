@@ -1,123 +1,66 @@
-﻿<!DOCTYPE html>
-<html lang="ms">
-<head>
-<meta charset="UTF-8">
-<title>BATIA OS - Panduan Operasi</title>
-<style>
-  body { font-family: 'Segoe UI', sans-serif; background:#0d1117; color:#e6edf3; margin:0; padding:40px; line-height:1.7; }
-  .wrap { max-width: 820px; margin: 0 auto; }
-  h1 { color:#58a6ff; border-bottom:2px solid #30363d; padding-bottom:10px; }
-  h2 { color:#f0883e; margin-top:32px; }
-  pre { background:#161b22; border:1px solid #30363d; border-radius:6px; padding:12px; overflow-x:auto; font-size:13px; white-space:pre-wrap; }
-  code { font-family: Consolas, monospace; }
-  .badge { display:inline-block; background:#1f6feb; border-radius:12px; padding:2px 12px; font-size:12px; margin:2px; }
-  .vip { background:#9a6700; }
-  .warn { background:#3d2a00; border-left:4px solid #f0883e; padding:10px 14px; border-radius:4px; margin:10px 0; }
-  ul li { margin:6px 0; }
-  @media print {
-    body { background:#fff; color:#111; padding:20px; }
-    pre { background:#f4f4f4; color:#111; border-color:#ccc; }
-    h1 { color:#0969da; } h2 { color:#bc4c00; }
-    .warn { background:#fff8ee; }
-  }
-</style>
-</head>
-<body>
-<div class="wrap">
-<h1> BATIA OS — Panduan Operasi &amp; Cheatsheet</h1>
-<p>AI Host untuk TikTok Live — Compliance-First, Bahasa Pasar Malaysia.<br>
-Repo: <code>github.com/imblackbutinside-sys/batia-os</code> (Private)</p>
-
-<h2>🚀 START SISTEM (setiap sesi)</h2>
-<ol>
-<li><b>Docker Desktop</b> → pastikan container <code>batia-os</code> running (PostgreSQL + Redis)</li>
-<li><b>Terminal 1:</b> <code>cd D:\batia-os</code> → <code>pnpm dev:orch</code></li>
-<li><b>Terminal 2:</b> <code>cd D:\batia-os</code> → <code>pnpm dev:web</code></li>
-<li><b>Browser:</b> <code>http://localhost:3000</code></li>
-</ol>
-
-<h2>💾 SIMPAN CODE KE GITHUB (lepas edit)</h2>
-<pre>cd D:\batia-os
-git add .
-git commit -m "ceritakan perubahan anda"
-git push</pre>
-
-<h2>📱 CONNECT KE TIKTOK LIVE</h2>
-<ol>
-<li>Phone mesti <b>tengah LIVE</b> (public)</li>
-<li>Taip username (tanpa @) → <b>CONNECT LIVE</b></li>
-<li><code>CONNECTED</code> = berjaya. Kalau <code>ERROR</code>, klik sekali lagi (TikTok warm-up)</li>
-</ol>
-
-<h2>🔊 PERATURAN SPEAKER (butang UNGU)</h2>
-<ul>
-<li>Bunyi HANYA keluar dari peranti yang <b>last klik butang ungu</b></li>
-<li>Lepas restart server → <b>klik ungu semula</b> pada peranti yang nak bunyi</li>
-<li><b>Laptop mode:</b> letak phone dekat speaker laptop (mic phone tangkap)</li>
-<li><b>Phone mode:</b> tab dashboard kena terbuka + screen ON</li>
-</ul>
-<p>Phone akses dashboard: <code>http://&lt;IP-laptop&gt;:3000</code> — tengok IP: <code>ipconfig | Select-String "IPv4"</code></p>
-
-<h2>🧪 BUTANG TEST</h2>
-<ul>
-<li><b>Test 1-4:</b> REGULAR (chit-chat / harga / violation)</li>
-<li><b>SHOP 1-3:</b> SHOPPABLE (katalog produk)</li>
-<li><b>HOST_CUE:</b> bisikan like-reminder automatik</li>
-<li><b>AUTO_PITCH:</b> SHOPPABLE + CONNECTED → pitch produk setiap 4 minit</li>
-</ul>
-
-<h2>🛠️ TROUBLESHOOTING</h2>
-
-<h3>1. ERR_PACKAGE_PATH_NOT_EXPORTED ./v3 (lepas pnpm install semula)</h3>
-<pre>cd D:\batia-os
-$p = "node_modules\.pnpm\tiktok-live-connector@2.4.3_debug@4.4.3\node_modules\tiktok-live-proto\package.json"
-$c = Get-Content $p -Raw
-$pattern = '"import": \{\s*"types": "(\./dist/node/(v\d)\.d\.ts)",\s*"default": "\./dist/node/\2\.js"\s*\}'
-$repl = '$0,' + "`n" + '      "require": { "types": "./dist/node/$2.d.ts", "default": "./dist/node/$2.js" }'
-$c2 = $c -replace $pattern, $repl
-Set-Content -Path $p -Value $c2 -Encoding ascii</pre>
-
-<h3>2. Emoji jadi ??</h3>
-<p>File ditulis ASCII. Guna UTF-8:</p>
-<pre>[System.IO.File]::WriteAllText($path, $content, [System.Text.UTF8Encoding]::new($false))</pre>
-
-<h3>3. Tak ada bunyi</h3>
-<ul>
-<li>Klik butang UNGU pada peranti yang nak bunyi</li>
-<li>SUARA ON (hijau) + volume naik</li>
-<li>Tutup tab BATIA lain (boleh curi sink)</li>
-</ul>
-
-<h3>4. window is not defined</h3>
-<pre>typeof window !== "undefined" ? io(...) : ({} as any)</pre>
-
-<h2>🗺️ ROADMAP BELUM SIAP</h2>
-<ul>
-<li>☐ Avatar DeepFaceLive (GPU 4GB)</li>
-<li>☐ OBS / TikTok Live Studio + VB-Cable (audio studio)</li>
-<li>☐ Test gift sebenar dalam live</li>
-<li>☐ Ujian Regular Live penuh sebagai official host</li>
-</ul>
-
-<h2>📊 FITUR SIAP</h2>
-<p>
-<span class="badge">AI Router Groq</span>
-<span class="badge">Persona Bahasa Pasar</span>
-<span class="badge">TTS Yasmin/Osman</span>
-<span class="badge">Policy 3-Tier</span>
-<span class="badge">Approval Zone</span>
-<span class="badge">Evidence Trail</span>
-<span class="badge">TikTok Adapter</span>
-<span class="badge">Katalog Produk</span>
-<span class="badge vip">VIP Memory</span>
-<span class="badge">Speaker Selector</span>
-<span class="badge">Like Reminder</span>
-<span class="badge">Live Stats</span>
-<span class="badge">Auto-Pitch</span>
-<span class="badge">GitHub Repo</span>
-</p>
-
-<p style="margin-top:40px; color:#8b949e; font-size:12px;">Dijana oleh BATIA™ — 2 hari, dari kosong ke AI host live. </p>
-</div>
-</body>
-</html>
+﻿<!DOCTYPE html><html lang="ms"><head><meta charset="UTF-8"><title>BATIA OS - Panduan Operasi & Cheatsheet</title>
+<style>body{font-family:Segoe UI,Arial;margin:40px;line-height:1.6}pre{background:#f5f5f5;padding:10px;border-left:4px solid #6a1b9a}table{border-collapse:collapse;width:100%}td,th{border:1px solid #bbb;padding:6px 10px;text-align:left}th{background:#ede7f6}.hash{font-size:1.5em;color:#b00020;font-weight:bold}h2{color:#6a1b9a}</style></head><body>
+<h1>BATIA OS - Panduan Operasi & Cheatsheet</h1>
+<p>Kemaskini: 14 Ogos 2026 | Repo: github.com/imblackbutinside-sys/batia-os</p>
+<h2>1. START SISTEM</h2>
+<pre>Terminal 1: cd D:\batia-os &gt; pnpm dev:orch   (AI + TTS + socket, port 4000)
+Terminal 2: cd D:\batia-os &gt; pnpm dev:web    (dashboard, port 3000)
+Browser: http://localhost:3000
+Phone: http://[IP-laptop]:3000 (network sama)</pre>
+<h2>2. DASHBOARD</h2>
+<table><tr><th>Butang</th><th>Fungsi</th></tr>
+<tr><td>YASMIN / OSMAN</td><td>Pilih persona suara Melayu</td></tr>
+<tr><td>SUARA ON/OFF</td><td>Senyapkan / hidupkan audio</td></tr>
+<tr><td>SPEAKER (ungu)</td><td>Klik pada peranti yang nak keluarkan bunyi</td></tr>
+<tr><td>REGULAR LIVE</td><td>Mode borak santai</td></tr>
+<tr><td>SHOPPABLE LIVE</td><td>Mode jualan + auto-pitch produk</td></tr>
+<tr><td>CONNECT LIVE</td><td>Sambung TikTok (taip username dulu)</td></tr></table>
+<h2>3. CHECKLIST SEBELUM LIVE</h2>
+<table><tr><th>#</th><th>Perkara</th></tr>
+<tr><td>1</td><td>Terminal 1 & 2 running, tiada error merah</td></tr>
+<tr><td>2</td><td>Klik SPEAKER ungu pada peranti bersuara</td></tr>
+<tr><td>3</td><td>Tekan Test 1 (warm-up; test pertama senyap = normal)</td></tr>
+<tr><td>4</td><td>Phone dekat speaker laptop, mic on</td></tr>
+<tr><td>5</td><td>GO LIVE TikTok (public)</td></tr>
+<tr><td>6</td><td>Dashboard: username &gt; CONNECT LIVE &gt; CONNECTED</td></tr>
+<tr><td>7</td><td>JANGAN refresh / restart masa live</td></tr></table>
+<h2>4. SUARA & BILINGUAL</h2>
+<table><tr><th>Butang</th><th>Melayu</th><th>English (auto)</th></tr>
+<tr><td>YASMIN</td><td>Yasmin (P)</td><td>Jenny (P)</td></tr>
+<tr><td>OSMAN</td><td>Osman (L)</td><td>Guy (L)</td></tr></table>
+<p>AI auto-detect: komen Melayu - jawab Melayu; komen English - jawab English + voice English.</p>
+<h2>5. TEST BUTTONS (RAWAK)</h2>
+<table><tr><th>Butang</th><th>Kategori</th></tr>
+<tr><td>Test 1</td><td>Chit-chat Melayu rawak</td></tr>
+<tr><td>Test EN</td><td>English rawak</td></tr>
+<tr><td>Test 2</td><td>Soalan harga rawak</td></tr>
+<tr><td>Test 3</td><td>Violation rawak (policy firewall)</td></tr>
+<tr><td>SHOP 1-3</td><td>Pitch produk (Shoppable)</td></tr></table>
+<h2>6. SAVE POINT & ROLLBACK</h2>
+<p class="hash">548adf3</p>
+<pre>git checkout 548adf3 -- apps/orchestrator/src apps/web/src
+# lepas tu restart Terminal 1 & 2, refresh browser</pre>
+<h2>7. TROUBLESHOOT PANTAS</h2>
+<table><tr><th>Masalah</th><th>Fix</th></tr>
+<tr><td>Test pertama senyap</td><td>Normal - tekan sekali lagi</td></tr>
+<tr><td>Bunyi hilang</td><td>Klik SPEAKER ungu, refresh, test</td></tr>
+<tr><td>English suara lelaki</td><td>Klik YASMIN untuk perempuan</td></tr>
+<tr><td>Load lambat</td><td>Compile pertama; biar tab terbuka</td></tr>
+<tr><td>Rosak teruk</td><td>Rollback 548adf3</td></tr></table>
+<h2>8. FEATURE LENGKAP</h2>
+<table><tr><td>AI bilingual MS/EN</td><td>OK</td></tr>
+<tr><td>4 voice: Yasmin/Osman/Jenny/Guy</td><td>OK</td></tr>
+<tr><td>Policy firewall + rewrite compliant</td><td>OK</td></tr>
+<tr><td>Stats live + panel VIP</td><td>OK</td></tr>
+<tr><td>Speaker auto-remember</td><td>OK</td></tr>
+<tr><td>Auto-pitch produk (Shoppable)</td><td>OK</td></tr>
+<tr><td>Test rawak 4 butang</td><td>OK</td></tr></table>
+<h2>9. ROADMAP (BELUM SIAP)</h2>
+<table><tr><td>Auto-sapa penonton baru</td><td>next</td></tr>
+<tr><td>Auto-terima gift bersuara</td><td>next</td></tr>
+<tr><td>Host cue whispers</td><td>next</td></tr>
+<tr><td>Like/follow reminder auto</td><td>next</td></tr>
+<tr><td>Production build</td><td>later</td></tr>
+<tr><td>.gitignore audio</td><td>later</td></tr></table>
+<p style="color:#666;font-size:12px">Dokumen operasi BATIA OS - tekan Ctrl+P untuk save sebagai PDF.</p>
+</body></html>

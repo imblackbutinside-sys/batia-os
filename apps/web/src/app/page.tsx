@@ -31,7 +31,8 @@ export default function Dashboard() {
     const label = /Mobi|Android/i.test(navigator.userAgent) ? "PHONE" : "LAPTOP";
     socket.emit(WS_EVENTS.AUDIO_CLAIM, { label });
   };
-  const [ttUser, setTtUser] = useState("");
+  const [ttUser, setTtUser] = useState(() => (typeof window !== "undefined" ? localStorage.getItem("batia_tt_user") || "" : ""));
+  useEffect(() => { if (ttUser) localStorage.setItem("batia_tt_user", ttUser); }, [ttUser]);
   const [ttStatus, setTtStatus] = useState("DISCONNECTED");
   useEffect(() => {
     socket.on(WS_EVENTS.TIKTOK_STATUS, (d: any) => setTtStatus(d.status));
