@@ -12,3 +12,5 @@ coverage/
 .turbo/
 pnpm-debug.log*
 apps/orchestrator/audio/
+
+apps/orchestrator/audio/

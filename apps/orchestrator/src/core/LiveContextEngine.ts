@@ -1,4 +1,4 @@
-import { classifyComment, routeAIRequest, rewriteForCompliance, generateBilingualResponse } from "../router/AIRouter.js";
+import { classifyComment, routeAIRequest, rewriteForCompliance, generateBilingualResponse, detectLang } from "../router/AIRouter.js";
 import { findProducts, formatCatalogForAI } from "../catalog/ProductCatalog.js";
 import { trackViewer } from "../memory/ViewerMemory.js";
 import { PolicyEngine, PolicyViolation } from "../policy/PolicyEngine.js";
@@ -12,6 +12,7 @@ const PERSONA = [
   "Jawapan MESTI pendek, 1-2 ayat sahaja, gaya percakapan live streaming.",
   "JANGAN minta gift, follow, share, atau guna wang sebagai pancingan komen.",
   "Kalau soalan peribadi (alamat, gaji, pasangan), deflect dengan jenaka santai.",
+  "JANGAN guna emoji, markdown, asterisk, hashtag, atau simbol khas dalam jawapan.",
 ].join(" ");
 
 const REGULAR_CONTEXT = "Ini SESI BORAK SANTAI (Regular Live). TIADA jualan malam ini. Kalau penonton tanya produk, harga, atau cara beli, jawab santai bahawa sekarang sesi borak, bukan sesi jualan, dan alihkan topik. JANGAN sebut harga atau buat pitch produk.";
@@ -95,8 +96,10 @@ export class LiveContextEngine {
       response = null;
     } else if (intent === "QUESTION" || intent === "PURCHASE") {
       const task = intent === "PURCHASE" && this.mode === "SHOPPABLE" ? "PRODUCT_PITCH" : "FAQ_REASONING";
+      const lang = detectLang(text);
+      const langInstr = lang === "MS" ? " JAWAB DALAM BAHASA MELAYU PASAR." : " REPLY IN NATURAL CASUAL ENGLISH.";
       const r = await routeAIRequest(task, [
-        { role: "system", content: PERSONA + " " + context },
+        { role: "system", content: PERSONA + " " + context + langInstr },
         { role: "user", content: username + ": " + text },
       ]);
       response = r.content;
@@ -117,5 +120,3 @@ export class LiveContextEngine {
     return r.content;
   }
 }
-
-

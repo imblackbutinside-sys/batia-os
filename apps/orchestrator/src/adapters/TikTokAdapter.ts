@@ -21,15 +21,17 @@ export class TikTokAdapter {
 
     this.conn.on("chat", (data: any) => {
       try {
-        const text = data.comment || data.text || data.content || "";
-        const uname = data.uniqueId || data.username || (data.user && (data.user.uniqueId || data.user.nickname)) || "viewer";
+        const text = data.comment || "";
+        const uname = data.user?.uniqueId || data.user?.nickname || data.uniqueId || data.username || "viewer";
         if (!text || !String(text).trim()) return;
         const now = Date.now();
         if (now - lastComment < 2000) return;
         lastComment = now;
         console.log("[TikTok] chat:", uname, ":", text);
         handlers.onComment(String(uname), String(text));
-      } catch (e) {}
+      } catch (e) {
+        console.error("[TikTok] chat error:", e);
+      }
     });
 
     this.conn.on("like", (data: any) => {
@@ -50,7 +52,7 @@ export class TikTokAdapter {
       try {
         const name = data.giftName || (data.gift && data.gift.name) || "gift";
         const value = data.diamondCount || (data.gift && data.gift.diamondCount) || 0;
-        const uname = data.uniqueId || (data.user && data.user.uniqueId) || "viewer";
+        const uname = data.user?.uniqueId || data.uniqueId || (data.user && data.user.uniqueId) || "viewer";
         if (data.repeatEnd) handlers.onGift(String(uname), String(name), Number(value));
       } catch (e) {}
     });
@@ -87,4 +89,3 @@ export class TikTokAdapter {
     this.connected = false;
   }
 }
-
