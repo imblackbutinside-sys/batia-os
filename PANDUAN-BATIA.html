@@ -1,12 +1,19 @@
-﻿<!DOCTYPE html><html lang="ms"><head><meta charset="UTF-8"><title>BATIA OS - Panduan Operasi & Cheatsheet</title>
-<style>body{font-family:Segoe UI,Arial;margin:40px;line-height:1.6}pre{background:#f5f5f5;padding:10px;border-left:4px solid #6a1b9a}table{border-collapse:collapse;width:100%}td,th{border:1px solid #bbb;padding:6px 10px;text-align:left}th{background:#ede7f6}.hash{font-size:1.5em;color:#b00020;font-weight:bold}h2{color:#6a1b9a}</style></head><body>
+﻿<!DOCTYPE html>
+<html lang="ms"><head><meta charset="UTF-8">
+<title>BATIA OS - Panduan Operasi & Cheatsheet</title>
+<style>body{font-family:Segoe UI,Arial,sans-serif;margin:40px;max-width:900px}
+h1{color:#e91e63}h2{border-bottom:2px solid #e91e63;padding-bottom:4px}
+table{border-collapse:collapse;width:100%}td,th{border:1px solid #ccc;padding:6px 10px;text-align:left}
+code{background:#eee;padding:2px 6px}</style></head><body>
 <h1>BATIA OS - Panduan Operasi & Cheatsheet</h1>
-<p>Kemaskini: 14 Ogos 2026 | Repo: github.com/imblackbutinside-sys/batia-os</p>
+<p>Kemaskini: 20 Ogos 2026 | Repo: github.com/imblackbutinside-sys/batia-os | Save point terkini: <code>568bc9e</code></p>
+
 <h2>1. START SISTEM</h2>
-<pre>Terminal 1: cd D:\batia-os &gt; pnpm dev:orch   (AI + TTS + socket, port 4000)
-Terminal 2: cd D:\batia-os &gt; pnpm dev:web    (dashboard, port 3000)
-Browser: http://localhost:3000
-Phone: http://[IP-laptop]:3000 (network sama)</pre>
+<table><tr><td>Terminal 1</td><td>cd D:\batia-os &gt; pnpm dev:orch (AI+TTS+socket, port 4000)</td></tr>
+<tr><td>Terminal 2</td><td>cd D:\batia-os &gt; pnpm dev:web (dashboard, port 3000)</td></tr>
+<tr><td>Browser</td><td>http://localhost:3000</td></tr>
+<tr><td>Phone</td><td>http://[IP-laptop]:3000 (network sama)</td></tr></table>
+
 <h2>2. DASHBOARD</h2>
 <table><tr><th>Butang</th><th>Fungsi</th></tr>
 <tr><td>YASMIN / OSMAN</td><td>Pilih persona suara Melayu</td></tr>
@@ -15,6 +22,7 @@ Phone: http://[IP-laptop]:3000 (network sama)</pre>
 <tr><td>REGULAR LIVE</td><td>Mode borak santai</td></tr>
 <tr><td>SHOPPABLE LIVE</td><td>Mode jualan + auto-pitch produk</td></tr>
 <tr><td>CONNECT LIVE</td><td>Sambung TikTok (taip username dulu)</td></tr></table>
+
 <h2>3. CHECKLIST SEBELUM LIVE</h2>
 <table><tr><th>#</th><th>Perkara</th></tr>
 <tr><td>1</td><td>Terminal 1 & 2 running, tiada error merah</td></tr>
@@ -24,11 +32,13 @@ Phone: http://[IP-laptop]:3000 (network sama)</pre>
 <tr><td>5</td><td>GO LIVE TikTok (public)</td></tr>
 <tr><td>6</td><td>Dashboard: username &gt; CONNECT LIVE &gt; CONNECTED</td></tr>
 <tr><td>7</td><td>JANGAN refresh / restart masa live</td></tr></table>
+
 <h2>4. SUARA & BILINGUAL</h2>
 <table><tr><th>Butang</th><th>Melayu</th><th>English (auto)</th></tr>
 <tr><td>YASMIN</td><td>Yasmin (P)</td><td>Jenny (P)</td></tr>
 <tr><td>OSMAN</td><td>Osman (L)</td><td>Guy (L)</td></tr></table>
 <p>AI auto-detect: komen Melayu - jawab Melayu; komen English - jawab English + voice English.</p>
+
 <h2>5. TEST BUTTONS (RAWAK)</h2>
 <table><tr><th>Butang</th><th>Kategori</th></tr>
 <tr><td>Test 1</td><td>Chit-chat Melayu rawak</td></tr>
@@ -36,17 +46,23 @@ Phone: http://[IP-laptop]:3000 (network sama)</pre>
 <tr><td>Test 2</td><td>Soalan harga rawak</td></tr>
 <tr><td>Test 3</td><td>Violation rawak (policy firewall)</td></tr>
 <tr><td>SHOP 1-3</td><td>Pitch produk (Shoppable)</td></tr></table>
+
 <h2>6. SAVE POINT & ROLLBACK</h2>
-<p class="hash">548adf3</p>
-<pre>git checkout 548adf3 -- apps/orchestrator/src apps/web/src
+<p><code>568bc9e</code></p>
+<pre>git checkout 568bc9e -- apps/orchestrator/src apps/web/src
 # lepas tu restart Terminal 1 & 2, refresh browser</pre>
+
 <h2>7. TROUBLESHOOT PANTAS</h2>
 <table><tr><th>Masalah</th><th>Fix</th></tr>
 <tr><td>Test pertama senyap</td><td>Normal - tekan sekali lagi</td></tr>
 <tr><td>Bunyi hilang</td><td>Klik SPEAKER ungu, refresh, test</td></tr>
 <tr><td>English suara lelaki</td><td>Klik YASMIN untuk perempuan</td></tr>
 <tr><td>Load lambat</td><td>Compile pertama; biar tab terbuka</td></tr>
-<tr><td>Rosak teruk</td><td>Rollback 548adf3</td></tr></table>
+<tr><td>Groq failed / DEMO MODE</td><td>Model lama luput 16/8/2026. Guna qwen/qwen3.6-27b (dah set dalam 568bc9e)</td></tr>
+<tr><td>TTS baca "thinking process"</td><td>reasoning_effort none + reasoning_format hidden (dah set dalam 568bc9e)</td></tr>
+<tr><td>Komen Melayu dijawab English</td><td>Language detection rule-based (dah fix dalam 568bc9e)</td></tr>
+<tr><td>Rosak teruk</td><td>Rollback 568bc9e</td></tr></table>
+
 <h2>8. FEATURE LENGKAP</h2>
 <table><tr><td>AI bilingual MS/EN</td><td>OK</td></tr>
 <tr><td>4 voice: Yasmin/Osman/Jenny/Guy</td><td>OK</td></tr>
@@ -54,13 +70,20 @@ Phone: http://[IP-laptop]:3000 (network sama)</pre>
 <tr><td>Stats live + panel VIP</td><td>OK</td></tr>
 <tr><td>Speaker auto-remember</td><td>OK</td></tr>
 <tr><td>Auto-pitch produk (Shoppable)</td><td>OK</td></tr>
-<tr><td>Test rawak 4 butang</td><td>OK</td></tr></table>
+<tr><td>Test rawak 4 butang</td><td>OK</td></tr>
+<tr><td>Username TikTok real</td><td>OK (568bc9e)</td></tr></table>
+
 <h2>9. ROADMAP (BELUM SIAP)</h2>
-<table><tr><td>Auto-sapa penonton baru</td><td>next</td></tr>
+<table><tr><td>Butang AI BACA KOMEN ON/OFF</td><td>asas ada (AiReadState.ts), UI belum</td></tr>
+<tr><td>SUARA KU (voice clone)</td><td>next</td></tr>
+<tr><td>Auto-sapa penonton baru</td><td>next</td></tr>
 <tr><td>Auto-terima gift bersuara</td><td>next</td></tr>
-<tr><td>Host cue whispers</td><td>next</td></tr>
-<tr><td>Like/follow reminder auto</td><td>next</td></tr>
-<tr><td>Production build</td><td>later</td></tr>
-<tr><td>.gitignore audio</td><td>later</td></tr></table>
-<p style="color:#666;font-size:12px">Dokumen operasi BATIA OS - tekan Ctrl+P untuk save sebagai PDF.</p>
+<tr><td>Production build</td><td>later</td></tr></table>
+
+<h2>10. NOTA AI & GROQ</h2>
+<table><tr><td>Model</td><td>qwen/qwen3.6-27b (Groq). JANGAN guna openai/*.</td></tr>
+<tr><td>API key</td><td>apps/orchestrator/.env (GROQ_API_KEY)</td></tr>
+<tr><td>Wajib</td><td>reasoning_effort:"none" + reasoning_format:"hidden" dalam callProvider</td></tr>
+<tr><td>Sejarah</td><td>llama-3.3-70b-versatile dibuang Groq 16/8/2026 (umumkan 17/6/2026)</td></tr></table>
+<p>Dokumen operasi BATIA OS - tekan Ctrl+P untuk save sebagai PDF.</p>
 </body></html>
