@@ -11,3 +11,4 @@ batia-backup.sql
 coverage/
 .turbo/
 pnpm-debug.log*
+apps/orchestrator/audio/
