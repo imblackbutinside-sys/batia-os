@@ -18,6 +18,11 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const policyPath = path.resolve(__dirname, "../../../policies/tiktok_my_2026.yaml");
 
 const engine = new LiveContextEngine(new PolicyEngine(policyPath));
+function normalizeMs(t: string): string {
+  return t.replace(/\\b([Yy])e\\b/g, (_, f) => f === 'Y' ? 'Ya' : 'ya')
+          .replace(/\\b([Bb])ole\\b/g, (_, f) => f === 'B' ? 'Boleh' : 'boleh')
+          .replace(/\\b([Tt])akpe\\b/g, (_, f) => f === 'T' ? 'Tak apa' : 'tak apa');
+}
 const tts = new TtsEngine();
 const tiktok = new TikTokAdapter();
 const httpServer = createServer();
@@ -31,7 +36,7 @@ function emitResponse(payload: any) {
 let scriptQueue: ScriptQueue;
 scriptQueue = new ScriptQueue(
   async (text) => {
-    const audioUrl = await tts.speak(text);
+    const audioUrl = await tts.speak(normalizeMs(text));
     emitResponse({ type: "QUEUE_SPEAK", content: text, targetUser: "semua", audioUrl });
     return audioUrl;
   },
@@ -146,7 +151,7 @@ async function processComment(username: string, text: string) {
       if (currentMode === "SHOPPABLE" && scriptQueue.running) {
         scriptQueue.addResponse(response, username + ": " + text);
       } else {
-        const audioUrl = await tts.speak(response);
+        const audioUrl = await tts.speak(normalizeMs(response));
         emitResponse({ type: "COMMENT_RESPONSE", content: response, targetUser: username, audioUrl });
       }
     }
@@ -160,7 +165,7 @@ async function processGift(username: string, giftName: string, giftValue: number
     const session = await ensureSession();
     liveStats.gifts++;
     const reaction = await engine.handleGift(session.id, username, giftName, giftValue);
-    const audioUrl = await tts.speak(reaction);
+    const audioUrl = await tts.speak(normalizeMs(reaction));
     emitResponse({ type: "GIFT_REACTION", content: reaction, targetUser: username, audioUrl });
   } catch (e) {
     console.error("[WS] gift error:", e);
@@ -229,7 +234,7 @@ io.on("connection", (socket) => {
       if (data.decision === "approved") {
         const text = data.finalText || (log ? log.resolvedText : null) || (log ? log.triggeredText : null) || "ok, terima!";
         if (log) await prisma.violationLog.update({ where: { id: data.id }, data: { humanResolved: true, resolvedText: text } }).catch(() => {});
-        const audioUrl = await tts.speak(text);
+        const audioUrl = await tts.speak(normalizeMs(text));
         console.log("[WS] approved, audioUrl:", audioUrl);
         emitResponse({ type: "APPROVED_RESPONSE", content: text, targetUser: data.username || "viewer", audioUrl });
       } else {
@@ -251,4 +256,5 @@ io.on("connection", (socket) => {
 httpServer.listen(PORT, () => {
   console.log("BATIA Orchestrator on http://localhost:" + PORT);
 });
+
 

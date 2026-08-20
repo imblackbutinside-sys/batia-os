@@ -97,7 +97,7 @@ export class LiveContextEngine {
     } else if (intent === "QUESTION" || intent === "PURCHASE") {
       const task = intent === "PURCHASE" && this.mode === "SHOPPABLE" ? "PRODUCT_PITCH" : "FAQ_REASONING";
       const lang = detectLang(text);
-      const langInstr = lang === "MS" ? " JAWAB DALAM BAHASA MELAYU PASAR." : " REPLY IN NATURAL CASUAL ENGLISH.";
+      const langInstr = lang === "MS" ? " JAWAB DALAM BAHASA MELAYU PASAR. Guna ejaan 'ya' (bukan 'ye'), 'tak' (bukan 'takpe'), 'boleh' (bukan 'bole')." : " REPLY IN NATURAL CASUAL ENGLISH.";
       const r = await routeAIRequest(task, [
         { role: "system", content: PERSONA + " " + context + langInstr },
         { role: "user", content: username + ": " + text },
