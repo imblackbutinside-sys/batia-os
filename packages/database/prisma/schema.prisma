@@ -26,9 +26,18 @@ model LiveSession {
 }
 
 model Product {
-  id    String @id @default(cuid())
-  title String
-  skus  Sku[]
+  id            String   @id @default(cuid())
+  title         String
+  description   String?
+  sellingPoints String[]
+  promoType     String?  @default("NONE")
+  promoValue    String?
+  promoCode     String?
+  videoLoopUrl  String?
+  isActive      Boolean  @default(true)
+  sortOrder     Int      @default(0)
+  skus          Sku[]
+  createdAt     DateTime @default(now())
 }
 
 model Sku {

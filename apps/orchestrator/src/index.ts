@@ -1,4 +1,4 @@
-import "dotenv/config";
+﻿import "dotenv/config";
 import { createServer } from "http";
 import { Server } from "socket.io";
 import path from "path";
@@ -8,6 +8,8 @@ import { PolicyEngine } from "./policy/PolicyEngine.js";
 import { LiveContextEngine } from "./core/LiveContextEngine.js";
 import { TtsEngine } from "./voice/TtsEngine.js";
 import { TikTokAdapter } from "./adapters/TikTokAdapter.js";
+import { ScriptQueue } from "./core/ScriptQueue.js";
+import { routeAIRequest } from "./router/AIRouter.js";
 import { prisma } from "@batia/database";
 import { WS_EVENTS } from "@batia/shared";
 
@@ -26,6 +28,16 @@ function emitResponse(payload: any) {
   io.emit(WS_EVENTS.AI_RESPONSE_READY, { ...payload, audioFor: audioSink ? audioSink.id : null });
 }
 
+let scriptQueue: ScriptQueue;
+scriptQueue = new ScriptQueue(
+  async (text) => {
+    const audioUrl = await tts.speak(text);
+    emitResponse({ type: "QUEUE_SPEAK", content: text, targetUser: "semua", audioUrl });
+    return audioUrl;
+  },
+  () => io.emit("script:update", scriptQueue.snapshot())
+);
+
 const liveStats = { viewers: 0, totalLikes: 0, comments: 0, gifts: 0 };
 const likeTimes: number[] = [];
 const commentTimes: number[] = [];
@@ -33,13 +45,34 @@ let lastCue = 0;
 let currentMode = "REGULAR";
 let pitchIdx = 0;
 let lastPitch = Date.now() - 200000;
-const PITCH_OPENERS = ["Korang, meh sini kejap!", "Eh eh, jangan lari dulu!", "Ha, ni special sikit..."];
 let tick = 0;
+
+async function genPitch(p: any) {
+  const sku = p.skus && p.skus[0];
+  const info = "PRODUK: " + p.title +
+    " | DESKRIPSI: " + (p.description || "") +
+    " | SELLING POINTS: " + (p.sellingPoints || []).join("; ") +
+    " | PROMO: " + (p.promoType && p.promoType !== "NONE" ? p.promoType + " " + (p.promoValue || "") + (p.promoCode ? " kod " + p.promoCode : "") : "tiada") +
+    " | HARGA: RM" + (sku ? sku.price : "") + " | STOK: " + (sku ? sku.stock : "");
+  const r = await routeAIRequest("PRODUCT_PITCH", [
+    { role: "system", content: "Kau host TikTok Live Malaysia yang sporting. Buat pitch jualan 2-3 ayat dalam BAHASA MELAYU PASAR santai. Sebut satu selling point, sebut promo/harga kalau ada, ajak tekan beg kuning. JANGAN emoji, markdown, asterisk, hashtag. Ejaan Melayu Malaysia: khabar, tak, nak, je, ni, tu, dah. JANGAN bahasa Indonesia (kabar, tidak, mahu, saja, ini)." },
+    { role: "user", content: info },
+  ]);
+  return r.content;
+}
+
+async function emitProduct() {
+  try {
+    const p = await prisma.product.findFirst({ where: { isActive: true }, include: { skus: true }, orderBy: { sortOrder: "asc" } });
+    if (p) io.emit("shop:product", p);
+  } catch (e) { console.error("[SHOP] emitProduct error:", e); }
+}
 
 setInterval(async () => {
   tick++;
   const now = Date.now();
   io.emit(WS_EVENTS.LIVE_STATS, { ...liveStats });
+  emitProduct();
   if (tick % 3 === 0) {
     try {
       const vips = await prisma.viewerMemory.findMany({ where: { isVip: true }, take: 10 });
@@ -57,23 +90,21 @@ setInterval(async () => {
     console.log("[CUE] like reminder fired");
     io.emit(WS_EVENTS.HOST_CUE, { text: "Penonton rancak borak tapi like slow ? boleh ajak tap screen sikit!" });
   }
-  if (currentMode === "SHOPPABLE" && tiktok.connected && now - lastPitch > 240000) {
-    lastPitch = now;
-    try {
-      const products = await prisma.product.findMany({ include: { skus: true } });
-      if (products.length > 0) {
-        const p = products[pitchIdx % products.length];
-        pitchIdx++;
-        const sku = p.skus[0];
-        if (sku) {
-          const opener = PITCH_OPENERS[pitchIdx % PITCH_OPENERS.length];
-          const pitch = opener + " " + p.title + " kita hari ni ? RM" + sku.price + " je, stok tinggal " + sku.stock + "! Siapa minat, tekan beg kuning sekarang!";
-          const audioUrl = await tts.speak(pitch);
-          emitResponse({ type: "AUTO_PITCH", content: pitch, targetUser: "semua", audioUrl });
-          console.log("[PITCH] auto-pitch fired:", p.title);
+  if (currentMode === "SHOPPABLE" && scriptQueue.running && !scriptQueue.paused) {
+    const hasQueued = scriptQueue.snapshot().items.some((i) => i.type === "PITCH" && i.status === "QUEUED");
+    if (!hasQueued && now - lastPitch > 30000) {
+      lastPitch = now;
+      try {
+        const products = await prisma.product.findMany({ include: { skus: true }, where: { isActive: true }, orderBy: { sortOrder: "asc" } });
+        if (products.length > 0) {
+          const p = products[pitchIdx % products.length];
+          pitchIdx++;
+          const pitch = await genPitch(p);
+          scriptQueue.addPitch(pitch);
+          console.log("[PITCH] queued:", p.title);
         }
-      }
-    } catch (e) { console.error("[PITCH] error:", e); }
+      } catch (e) { console.error("[PITCH] error:", e); }
+    }
   }
 }, 5000);
 
@@ -112,8 +143,12 @@ async function processComment(username: string, text: string) {
     for (const v of violations) io.emit(WS_EVENTS.POLICY_VIOLATION, v);
     if (approvalRequest) io.emit(WS_EVENTS.APPROVAL_REQUEST, approvalRequest);
     if (response) {
-      const audioUrl = await tts.speak(response);
-      emitResponse({ type: "COMMENT_RESPONSE", content: response, targetUser: username, audioUrl });
+      if (currentMode === "SHOPPABLE" && scriptQueue.running) {
+        scriptQueue.addResponse(response, username + ": " + text);
+      } else {
+        const audioUrl = await tts.speak(response);
+        emitResponse({ type: "COMMENT_RESPONSE", content: response, targetUser: username, audioUrl });
+      }
     }
   } catch (e) {
     console.error("[WS] comment error:", e);
@@ -135,6 +170,8 @@ async function processGift(username: string, giftName: string, giftValue: number
 io.on("connection", (socket) => {
   console.log("[WS] client connected:", socket.id);
   if (!audioSink) audioSink = { id: socket.id, label: "LAPTOP" };
+  socket.emit("script:update", scriptQueue.snapshot());
+  emitProduct();
   socket.on(WS_EVENTS.AUDIO_CLAIM, (data: { label: string }) => {
     audioSink = { id: socket.id, label: data.label };
     console.log("[WS] audio sink ->", data.label);
@@ -146,9 +183,9 @@ io.on("connection", (socket) => {
   socket.on(WS_EVENTS.GIFT_RECEIVED, (data: { username: string; giftName: string; giftValue: number }) => {
     processGift(data.username, data.giftName, data.giftValue);
   });
-  socket.on(WS_EVENTS.TIKTOK_CONNECT, async (data: { username: string }) => {
+  socket.on(WS_EVENTS.TIKTOK_CONNECT, (data: { username: string }) => {
     io.emit(WS_EVENTS.TIKTOK_STATUS, { status: "CONNECTING..." });
-    await tiktok.connect(data.username, {
+    tiktok.connect(data.username, {
       onComment: processComment,
       onGift: processGift,
       onLike: (n: number) => { likeTimes.push(Date.now()); liveStats.totalLikes += n; },
@@ -159,6 +196,30 @@ io.on("connection", (socket) => {
   socket.on(WS_EVENTS.TIKTOK_DISCONNECT, () => {
     tiktok.disconnect();
     io.emit(WS_EVENTS.TIKTOK_STATUS, { status: "DISCONNECTED" });
+  });
+  socket.on("shop:start", async () => {
+    try {
+      const products = await prisma.product.findMany({ include: { skus: true }, where: { isActive: true }, orderBy: { sortOrder: "asc" } });
+      scriptQueue.start(products[0] ? products[0].title : "Produk");
+      for (const p of products.slice(0, 2)) {
+        const pitch = await genPitch(p);
+        scriptQueue.addPitch(pitch);
+      }
+    } catch (e) { console.error("[SHOP] start error:", e); }
+  });
+  socket.on("shop:stop", () => scriptQueue.stop());
+  socket.on("shop:pause", () => scriptQueue.pause());
+  socket.on("shop:resume", () => scriptQueue.resume());
+  socket.on("shop:settings", (d: any) => scriptQueue.setSettings(d || {}));
+  socket.on("shop:config", async (d: { description: string; sellingPoints: string[]; promoValue?: string; promoCode?: string }) => {
+    try {
+      const p = await prisma.product.findFirst({ where: { isActive: true }, orderBy: { sortOrder: "asc" } });
+      if (p) {
+        await prisma.product.update({ where: { id: p.id }, data: { description: d.description, sellingPoints: d.sellingPoints, promoValue: d.promoValue || null, promoCode: d.promoCode || null } });
+        io.emit("shop:configured", { ok: true });
+        emitProduct();
+      }
+    } catch (e) { console.error("[SHOP] config error:", e); }
   });
   socket.on(WS_EVENTS.APPROVAL_DECISION, async (data: { id: string; decision: "approved" | "rejected"; finalText?: string; username?: string }) => {
     console.log("[WS] approval decision:", data.decision, data.id);
@@ -190,3 +251,4 @@ io.on("connection", (socket) => {
 httpServer.listen(PORT, () => {
   console.log("BATIA Orchestrator on http://localhost:" + PORT);
 });
+
