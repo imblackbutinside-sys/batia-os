@@ -27,6 +27,11 @@ export default function Dashboard() {
   const [prodConfigured, setProdConfigured] = useState(false);
   const [voiceStyle, setVoiceStyle] = useState("Casual");
   const [interjectText, setInterjectText] = useState("");
+  const [musicQ, setMusicQ] = useState("");
+  const [musicPaused, setMusicPaused] = useState(false);
+  const [musicVolume, setMusicVolume] = useState(1);
+  const [music, setMusic] = useState<any>({ state: "IDLE" });
+  const musicAudio = useRef<any>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
@@ -88,6 +93,26 @@ export default function Dashboard() {
   };
 
   useEffect(() => {
+    socket.on("music:status", (d: any) => {
+      setMusic(d);
+      console.log("[MUSIC-WEB] state:", d.state, "| audioFor:", d.audioFor, "| me:", socket.id, "| url:", d.url);
+      if (d.state === "PLAYING" && d.url && d.audioFor !== socket.id) { console.log("[MUSIC-WEB] skip - not my sink"); return; }
+      if (d.state === "PLAYING" && d.url) {
+        if (musicAudio.current) musicAudio.current.pause();
+        const mpath = d.url.indexOf("/music/") >= 0 ? d.url.slice(d.url.indexOf("/music/")) : d.url;
+        const a = new Audio("http://" + window.location.hostname + ":4000" + mpath);
+        a.volume = musicVolume;
+        musicAudio.current = a;
+        a.onended = () => { socket.emit("music:ended", { file: d.url }); setMusic({ state: "IDLE" }); };
+      a.onerror = () => { console.log("[MUSIC-WEB] play error", d.url); socket.emit("music:ended", { file: d.url }); setMusic({ state: "IDLE" }); };
+        a.play().catch(() => {});
+      }
+      if (d.state === "STOPPED") { if (musicAudio.current) { musicAudio.current.pause(); musicAudio.current.currentTime = 0; musicAudio.current = null; } setMusicPaused(false); }
+      if (d.state === "PAUSED") { if (musicAudio.current) musicAudio.current.pause(); setMusicPaused(true); }
+      if (d.state === "PLAYING") { if (musicAudio.current) musicAudio.current.play().catch(() => {}); setMusicPaused(false); }
+      if (d.state === "CACHE_CLEARED") { setMusic({ state: "CACHE_CLEARED", q: d.q }); }
+      if (d.state === "VOLUME") setMusicVolume(d.vol);
+    });
     socket.on(WS_EVENTS.COMMENT_LOG, (d: any) => setComments((p) => [d, ...p].slice(0, 20)));
     socket.on(WS_EVENTS.POLICY_VIOLATION, (d: any) => setViolations((p) => [d, ...p].slice(0, 20)));
     socket.on(WS_EVENTS.APPROVAL_REQUEST, (d: any) => setApprovals((p) => [d, ...p].slice(0, 10)));
@@ -257,6 +282,24 @@ export default function Dashboard() {
         {vips.length === 0 ? <span className="text-gray-500 ml-2">belum ada lagi</span> : vips.map((v) => <span key={v} className="ml-2 px-2 py-1 bg-yellow-700 rounded">{v}</span>)}
       </div>
 
+      <div className="mb-6 bg-gray-900 rounded p-4 flex items-center gap-3">
+        <span className="text-sm font-semibold">{"\uD83C\uDFB5"} Muzik (YouTube):</span>
+        <input value={musicQ} onChange={(e) => setMusicQ(e.target.value)} placeholder="Tajuk lagu atau URL YouTube" className="bg-gray-800 rounded px-3 py-2 text-sm flex-1" />
+        <button onClick={() => { socket.emit("music:play", { q: musicQ }); setMusicPaused(false); }} className="bg-teal-600 hover:bg-teal-500 px-4 py-2 rounded text-sm">Mainkan</button>
+        <button onClick={() => {
+          console.log("[MUSIC] pause/resume click | state:", music.state, "| paused:", musicPaused);
+          if (music.state === "PLAYING" && !musicPaused) socket.emit("music:pause", {});
+          else if (musicPaused) socket.emit("music:resume", {});
+        }} className={"px-4 py-2 rounded text-sm " + (musicPaused ? "bg-green-700 hover:bg-green-600" : "bg-yellow-700 hover:bg-yellow-600")} disabled={music.state !== "PLAYING" && !musicPaused}>
+          {musicPaused ? "Play" : "Pause"}
+        </button>
+        <button onClick={() => { console.log("[MUSIC] stop click"); socket.emit("music:stop", {}); setMusicPaused(false); }} className="bg-red-700 hover:bg-red-600 px-4 py-2 rounded text-sm">Stop</button>
+        <span className="text-xs text-gray-400 flex-1">{music.state === "FETCHING" ? "Sedang download..." : music.state === "PLAYING" ? (musicPaused ? "Paused: " : "Now playing: ") + music.q : music.state === "FAILED" ? "Tak jumpa lagu tu" : music.state === "CACHE_CLEARED" ? "Lagu " + music.q + " dah habis, cache dibersihkan ✓" : "ready"}</span>
+        <span className="text-xs text-purple-300">{"\uD83D\uDD0A"}</span>
+        <input type="range" min={0} max={1} step={0.05} value={musicVolume} onChange={(e) => { const v = +e.target.value; setMusicVolume(v); if (musicAudio.current) musicAudio.current.volume = v; socket.emit("music:volume", { vol: v }); }} className="w-24" />
+        <span className="text-xs w-8">{Math.round(musicVolume * 100)}%</span>
+      </div>
+
       <div className="grid grid-cols-3 gap-6">
         <div className="bg-gray-900 rounded p-4">
           <h2 className="font-semibold mb-3">Studio Preview</h2>
@@ -293,6 +336,7 @@ export default function Dashboard() {
             <button onClick={() => send("Battery tahan berapa jam?")} className="bg-amber-700 rounded px-3 py-2 text-sm text-left">SHOP 2: Soalan battery</button>
             <button onClick={() => send("Ada promo tak hari ni?")} className="bg-amber-700 rounded px-3 py-2 text-sm text-left">SHOP 3: Promo</button>
             <button onClick={() => socket.emit("test:join", {})} className="bg-teal-700 rounded px-3 py-2 text-sm text-left">Test JOIN: penonton baru masuk</button>
+            <button onClick={() => send("boleh request lagu instrumental santai tak?")} className="bg-teal-700 rounded px-3 py-2 text-sm text-left">Test MUZIK: request lagu</button>
           </div>
           <div className="space-y-2 overflow-y-auto max-h-[300px]">
             {comments.map((c, i) => (
@@ -341,3 +385,12 @@ export default function Dashboard() {
     </div>
   );
 }
+
+
+
+
+
+
+
+
+

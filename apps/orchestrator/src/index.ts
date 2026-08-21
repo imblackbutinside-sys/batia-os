@@ -12,6 +12,9 @@ import { ScriptQueue } from "./core/ScriptQueue.js";
 import { routeAIRequest, detectLang } from "./router/AIRouter.js";
 import { prisma } from "@batia/database";
 import { WS_EVENTS } from "@batia/shared";
+import { execFile } from "child_process";
+import { promisify } from "util";
+const execFileAsync = promisify(execFile);
 
 const PORT = parseInt(process.env.ORCHESTRATOR_PORT || "4000");
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -130,6 +133,17 @@ setInterval(async () => {
   const now = Date.now();
   io.emit(WS_EVENTS.LIVE_STATS, { ...liveStats });
   emitProduct();
+  if (tick % 60 === 0) {
+    try {
+      if (fs.existsSync(musicDir)) {
+        const cutoff = Date.now() - 15 * 60 * 1000;
+        for (const fn of fs.readdirSync(musicDir)) {
+          const p = path.join(musicDir, fn);
+          if (fs.statSync(p).mtimeMs < cutoff) { fs.unlinkSync(p); console.log("[MUSIC] cache cleanup:", fn); }
+        }
+      }
+    } catch (e) {}
+  }
   if (tick % 3 === 0) {
     try {
       const vips = await prisma.viewerMemory.findMany({ where: { isVip: true }, take: 10 });
@@ -165,11 +179,51 @@ setInterval(async () => {
   }
 }, 5000);
 
+const musicDir = path.join(process.cwd(), "audio", "music");
+
+async function fetchMusic(q: string): Promise<string | null> {
+  try {
+    fs.mkdirSync(musicDir, { recursive: true });
+    const isUrl = /https?:\/\//.test(q);
+    const ytdlp = fs.existsSync(path.join(process.cwd(), "..", "..", "tools", "yt-dlp.exe")) ? path.join(process.cwd(), "..", "..", "tools", "yt-dlp.exe") : "yt-dlp";
+    const args = [isUrl ? q : "ytsearch1:" + q, "-f", "bestaudio/best", "-o", path.join(musicDir, "%(id)s.%(ext)s"), "--no-playlist", "--quiet", "--no-warnings"];
+    await execFileAsync(ytdlp, args, { timeout: 60000 });
+    const files = fs.readdirSync(musicDir).map((fn) => ({ fn, t: fs.statSync(path.join(musicDir, fn)).mtimeMs })).sort((a, b) => b.t - a.t);
+    return files[0] ? "/music/" + files[0].fn : null;
+  } catch (e) { console.error("[MUSIC] fetch error:", e); return null; }
+}
+
+let lastSong = 0;
+let currentMusicFile: string | null = null;
+let lastMusicQ = "";
+let musicVolume = 1.0;
+async function playMusic(q: string) {
+  const sink = audioSink ? audioSink.id : null;
+  io.emit("music:status", { state: "FETCHING", q, audioFor: sink });
+  const url = await fetchMusic(q);
+  if (url) { currentMusicFile = path.join(musicDir, path.basename(url)); lastMusicQ = q; io.emit("music:status", { state: "PLAYING", q, url: "http://localhost:4000" + url, audioFor: sink }); }
+  else io.emit("music:status", { state: "FAILED", q, audioFor: sink });
+}
+
 httpServer.on("request", (req, res) => {
+  if (req.url && req.url.startsWith("/music/")) {
+    const file = path.join(musicDir, path.basename(req.url));
+    if (fs.existsSync(file)) {
+      const ext = path.extname(file).toLowerCase();
+      const mime = ext === ".webm" ? "audio/webm" : ext === ".m4a" ? "audio/mp4" : ext === ".opus" ? "audio/opus" : ext === ".mp3" ? "audio/mpeg" : "audio/mpeg";
+      res.writeHead(200, { "Content-Type": mime, "Accept-Ranges": "bytes" });
+      fs.createReadStream(file).pipe(res);
+      return;
+    }
+    res.writeHead(404);
+    res.end("not found");
+  }
   if (req.url && req.url.startsWith("/audio/")) {
     const file = path.join(process.cwd(), "audio", path.basename(req.url));
     if (fs.existsSync(file)) {
-      res.writeHead(200, { "Content-Type": "audio/mpeg" });
+      const ext = path.extname(file).toLowerCase();
+      const mime = ext === ".webm" ? "audio/webm" : ext === ".m4a" ? "audio/mp4" : ext === ".opus" ? "audio/opus" : ext === ".mp3" ? "audio/mpeg" : "audio/mpeg";
+      res.writeHead(200, { "Content-Type": mime, "Accept-Ranges": "bytes" });
       fs.createReadStream(file).pipe(res);
       return;
     }
@@ -196,6 +250,14 @@ async function processComment(username: string, text: string) {
     commentTimes.push(Date.now());
     liveStats.comments++;
     io.emit(WS_EVENTS.COMMENT_LOG, { username, text });
+    if (false) {
+      const nowS = Date.now();
+      if (nowS - lastSong > 60000) {
+        lastSong = nowS;
+        void (async () => { let q = ""; try { const r = await routeAIRequest("CHITCHAT", [{ role: "system", content: "Ekstrak tajuk lagu daripada komen penonton. Jawab DENGAN tajuk lagu sahaja (serta artis jika disebut). Tiada ayat lain, tiada tanda petik." }, { role: "user", content: text }]); q = r.content.replace(/"/g, "").trim(); } catch (e) {} if (!q) q = text.replace(/[?!.]/g, "").replace(/\b(boleh|tak|nak|request|req|lagu|nyanyi|play|putar|sikit|bang|kak|main)\b/gi, "").trim() || text; playMusic(q); })();
+
+      }
+    }
     const { response, violations, approvalRequest } = await engine.handleComment(session.id, username, text);
     for (const v of violations) io.emit(WS_EVENTS.POLICY_VIOLATION, v);
     if (approvalRequest) io.emit(WS_EVENTS.APPROVAL_REQUEST, approvalRequest);
@@ -274,6 +336,20 @@ io.on("connection", (socket) => {
     if (t) { scriptQueue.addPitch(t); console.log("[INTERJECT] queued:", t); }
   });
   socket.on("test:join", () => handleJoin("abam_test_join"));
+  socket.on("music:play", (d: any) => { const q = String((d && d.q) || "").trim(); if (q) void playMusic(q); });
+  socket.on("music:pause", () => io.emit("music:status", { state: "PAUSED" }));
+  socket.on("music:resume", () => io.emit("music:status", { state: "PLAYING" }));
+  socket.on("music:volume", (d: any) => { musicVolume = Math.max(0, Math.min(1, Number(d && d.vol) || 1)); io.emit("music:status", { state: "VOLUME", vol: musicVolume }); });
+  socket.on("music:stop", () => {
+    try { if (currentMusicFile && fs.existsSync(currentMusicFile)) { fs.unlinkSync(currentMusicFile); console.log("[MUSIC] stop-delete:", path.basename(currentMusicFile)); } } catch (e) {}
+    currentMusicFile = null;
+    io.emit("music:status", { state: "STOPPED" });
+  });
+  socket.on("music:ended", (d: any) => {
+    try {
+      if (d && d.file) { const p = path.join(musicDir, path.basename(String(d.file))); if (fs.existsSync(p)) { fs.unlinkSync(p); console.log("[MUSIC] cache deleted:", path.basename(p)); io.emit("music:status", { state: "CACHE_CLEARED", q: lastMusicQ }); } }
+    } catch (e) {}
+  });
   socket.on("shop:config", async (d: { description: string; sellingPoints: string[]; promoValue?: string; promoCode?: string }) => {
     try {
       const p = await prisma.product.findFirst({ where: { isActive: true }, orderBy: { sortOrder: "asc" } });
@@ -314,6 +390,16 @@ io.on("connection", (socket) => {
 httpServer.listen(PORT, () => {
   console.log("BATIA Orchestrator on http://localhost:" + PORT);
 });
+
+
+
+
+
+
+
+
+
+
 
 
 
