@@ -1,4 +1,4 @@
-import { TikTokLiveConnection } from "tiktok-live-connector";
+﻿import { TikTokLiveConnection } from "tiktok-live-connector";
 
 export class TikTokAdapter {
   private conn: any = null;
@@ -12,6 +12,7 @@ export class TikTokAdapter {
       onLike: (count: number) => void;
       onViewer: (count: number) => void;
       onStatus: (status: string) => void;
+      onJoin?: (username: string) => void;
     }
   ) {
     this.disconnect();
@@ -54,6 +55,13 @@ export class TikTokAdapter {
         const value = data.diamondCount || (data.gift && data.gift.diamondCount) || 0;
         const uname = data.user?.uniqueId || data.uniqueId || (data.user && data.user.uniqueId) || "viewer";
         if (data.repeatEnd) handlers.onGift(String(uname), String(name), Number(value));
+      } catch (e) {}
+    });
+
+    this.conn.on("member", (data: any) => {
+      try {
+        const uname = data?.user?.uniqueId || data?.uniqueId || "";
+        if (uname && handlers.onJoin) handlers.onJoin(String(uname));
       } catch (e) {}
     });
 

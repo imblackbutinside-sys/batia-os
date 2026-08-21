@@ -9,7 +9,7 @@ import { LiveContextEngine } from "./core/LiveContextEngine.js";
 import { TtsEngine } from "./voice/TtsEngine.js";
 import { TikTokAdapter } from "./adapters/TikTokAdapter.js";
 import { ScriptQueue } from "./core/ScriptQueue.js";
-import { routeAIRequest } from "./router/AIRouter.js";
+import { routeAIRequest, detectLang } from "./router/AIRouter.js";
 import { prisma } from "@batia/database";
 import { WS_EVENTS } from "@batia/shared";
 
@@ -19,9 +19,39 @@ const policyPath = path.resolve(__dirname, "../../../policies/tiktok_my_2026.yam
 
 const engine = new LiveContextEngine(new PolicyEngine(policyPath));
 function normalizeMs(t: string): string {
-  return t.replace(/\\b([Yy])e\\b/g, (_, f) => f === 'Y' ? 'Ya' : 'ya')
-          .replace(/\\b([Bb])ole\\b/g, (_, f) => f === 'B' ? 'Boleh' : 'boleh')
-          .replace(/\\b([Tt])akpe\\b/g, (_, f) => f === 'T' ? 'Tak apa' : 'tak apa');
+  if (detectLang(t) === "EN") return t;
+  const map: [RegExp, string][] = [
+    [/\b[Yy]e\b/g, "ya"],
+    [/\b[Bb]ole\b/g, "boleh"],
+    [/\b[Tt]akpe\b/g, "tak apa"],
+    [/\b[Ll]ive\b/g, "laiv"],
+    [/\b[Oo]nline\b/g, "onlain"],
+    [/\b[Ee]arbuds?\b/g, "erbad"],
+    [/\b[Bb]luetooth\b/g, "blutut"],
+    [/\b[Nn]oise [Cc]ancelling\b/g, "nois kenseling"],
+    [/\b[Bb]attery [Ll]ife\b/g, "betri laif"],
+    [/\b[Bb]attery\b/g, "betri"],
+    [/\b[Ww]aterproof\b/g, "woterpruf"],
+    [/\b[Cc]harging [Cc]ase\b/g, "carging kes"],
+    [/\b[Cc]rystal [Cc]lear\b/g, "kristal klier"],
+    [/\b[Gg]aming\b/g, "geiming"],
+    [/\b[Cc]all\b/g, "kol"],
+    [/\b[Ss]hare\b/g, "syer"],
+    [/\b[Ff]ollow\b/g, "folo"],
+    [/\b[Ss]upport\b/g, "saport"],
+    [/\b[Ww]elcome\b/g, "welkam"],
+    [/\b[Ff]lash [Ss]ale\b/g, "fles seil"],
+    [/\b[Ww]ireless\b/g, "wairles"],
+    [/\b[Ss]creen\b/g, "skrin"],
+    [/\b[Dd]isplay\b/g, "displei"],
+    [/\b[Rr]ating\b/g, "reiting"],
+    [/\b[Ee]xercise\b/g, "eksersais"],
+    [/\b[Cc]onnection\b/g, "koneksyen"],
+    [/\b[Ll]ink\b/g, "lingk"],
+  ];
+  let out = t;
+  for (const [re, rep] of map) out = out.replace(re, rep);
+  return out;
 }
 const tts = new TtsEngine();
 const tiktok = new TikTokAdapter();
@@ -50,6 +80,28 @@ let lastCue = 0;
 let currentMode = "REGULAR";
 let pitchIdx = 0;
 let lastPitch = Date.now() - 200000;
+let lastGreet = 0;
+
+function handleJoin(uname: string) {
+  const now = Date.now();
+  if (now - lastGreet < 25000) return;
+  lastGreet = now;
+  void (async () => {
+    try {
+      const r = await routeAIRequest("CHITCHAT", [
+        { role: "system", content: "Kau host TikTok Live Malaysia yang mesra. Sapa penonton baru dengan nama dia. 1 ayat pendek santai Bahasa Melayu pasar. JANGAN emoji, markdown, asterisk. Guna ya bukan ye." },
+        { role: "user", content: "Penonton baru join: " + uname },
+      ]);
+      if (scriptQueue.running) {
+        scriptQueue.addGreet(r.content, uname);
+      } else {
+        const audioUrl = await tts.speak(normalizeMs(r.content));
+        emitResponse({ type: "GREET", content: r.content, targetUser: uname, audioUrl });
+      }
+      console.log("[GREET] ->", uname);
+    } catch (e) { console.error("[GREET] error:", e); }
+  })();
+}
 let tick = 0;
 
 async function genPitch(p: any) {
@@ -196,6 +248,7 @@ io.on("connection", (socket) => {
       onLike: (n: number) => { likeTimes.push(Date.now()); liveStats.totalLikes += n; },
       onViewer: (v: number) => { liveStats.viewers = v; },
       onStatus: (s) => io.emit(WS_EVENTS.TIKTOK_STATUS, { status: s }),
+      onJoin: (u) => handleJoin(u),
     });
   });
   socket.on(WS_EVENTS.TIKTOK_DISCONNECT, () => {
@@ -216,6 +269,11 @@ io.on("connection", (socket) => {
   socket.on("shop:pause", () => scriptQueue.pause());
   socket.on("shop:resume", () => scriptQueue.resume());
   socket.on("shop:settings", (d: any) => scriptQueue.setSettings(d || {}));
+  socket.on("shop:interject", (d: any) => {
+    const t = String((d && d.text) || "").trim();
+    if (t) { scriptQueue.addPitch(t); console.log("[INTERJECT] queued:", t); }
+  });
+  socket.on("test:join", () => handleJoin("abam_test_join"));
   socket.on("shop:config", async (d: { description: string; sellingPoints: string[]; promoValue?: string; promoCode?: string }) => {
     try {
       const p = await prisma.product.findFirst({ where: { isActive: true }, orderBy: { sortOrder: "asc" } });
@@ -256,5 +314,7 @@ io.on("connection", (socket) => {
 httpServer.listen(PORT, () => {
   console.log("BATIA Orchestrator on http://localhost:" + PORT);
 });
+
+
 
 

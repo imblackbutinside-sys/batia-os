@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useRef, useState } from "react";
 import { io } from "socket.io-client";
@@ -26,6 +26,7 @@ export default function Dashboard() {
   const [promoCode, setPromoCode] = useState("");
   const [prodConfigured, setProdConfigured] = useState(false);
   const [voiceStyle, setVoiceStyle] = useState("Casual");
+  const [interjectText, setInterjectText] = useState("");
   const videoRef = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
@@ -123,6 +124,12 @@ export default function Dashboard() {
   };
   const setPause = (min: number, max: number) => socket.emit("shop:settings", { pauseMin: min, pauseMax: max });
   const setSpeed = (s: number) => socket.emit("shop:settings", { playbackSpeed: s });
+  const doInterject = () => {
+    const t = interjectText.trim();
+    if (!t) return;
+    socket.emit("shop:interject", { text: t });
+    setInterjectText("");
+  };
 
   return (
     <div className="min-h-screen p-6">
@@ -207,6 +214,10 @@ export default function Dashboard() {
             <span className="text-sm">{(shop.playbackSpeed || 1).toFixed(2)}x</span>
           </div>
           <div className="flex gap-2 mb-3">
+            <input value={interjectText} onChange={(e) => setInterjectText(e.target.value)} placeholder="Interject: nak AI cakap apa sekarang?" className="bg-gray-800 rounded px-3 py-2 text-sm flex-1" />
+            <button onClick={doInterject} className="bg-orange-600 hover:bg-orange-500 px-4 py-2 rounded text-sm font-semibold">Cakap Sekarang</button>
+          </div>
+          <div className="flex gap-2 mb-3">
             <button onClick={() => setShopTab("SCRIPT")} className={"px-3 py-1 rounded text-sm " + (shopTab === "SCRIPT" ? "bg-gray-700 border border-gray-500" : "bg-gray-800")}>Product Script</button>
             <button onClick={() => setShopTab("COMMENTS")} className={"px-3 py-1 rounded text-sm " + (shopTab === "COMMENTS" ? "bg-gray-700 border border-gray-500" : "bg-gray-800")}>Comments</button>
           </div>
@@ -217,7 +228,7 @@ export default function Dashboard() {
                 <div key={it.id} className={"rounded p-3 text-sm border " + (it.status === "SPEAKING" ? "bg-blue-900/40 border-blue-500" : it.status === "QUEUED" ? "bg-gray-800 border-gray-700" : "bg-gray-800/50 border-gray-800")}>
                   <div className="flex items-center gap-2 mb-1">
                     <span className="text-xs bg-purple-700 rounded-full px-2 py-0.5">{it.id}</span>
-                    <span className={"text-xs px-2 py-0.5 rounded " + (it.type === "PITCH" ? "bg-blue-600" : "bg-purple-600")}>{it.type === "PITCH" ? "Pitch" : "Response"}</span>
+                    <span className={"text-xs px-2 py-0.5 rounded " + (it.type === "PITCH" ? "bg-blue-600" : it.type === "GREET" ? "bg-green-600" : "bg-purple-600")}>{it.type === "PITCH" ? "Pitch" : it.type === "GREET" ? "Greet" : "Response"}</span>
                     <span className="text-xs text-gray-400">{it.status === "SPEAKING" ? "Speaking Now" : it.status === "QUEUED" ? "Queued" : "Completed"} ~{it.durationEst}s</span>
                   </div>
                   <p className={it.status === "COMPLETED" ? "text-gray-500" : ""}>{it.text}</p>
@@ -281,6 +292,7 @@ export default function Dashboard() {
             <button onClick={() => send("Berapa harga earbuds ni?")} className="bg-amber-700 rounded px-3 py-2 text-sm text-left">SHOP 1: Harga earbuds</button>
             <button onClick={() => send("Battery tahan berapa jam?")} className="bg-amber-700 rounded px-3 py-2 text-sm text-left">SHOP 2: Soalan battery</button>
             <button onClick={() => send("Ada promo tak hari ni?")} className="bg-amber-700 rounded px-3 py-2 text-sm text-left">SHOP 3: Promo</button>
+            <button onClick={() => socket.emit("test:join", {})} className="bg-teal-700 rounded px-3 py-2 text-sm text-left">Test JOIN: penonton baru masuk</button>
           </div>
           <div className="space-y-2 overflow-y-auto max-h-[300px]">
             {comments.map((c, i) => (

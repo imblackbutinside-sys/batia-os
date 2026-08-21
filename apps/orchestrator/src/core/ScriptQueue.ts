@@ -1,6 +1,6 @@
 ﻿export interface ScriptItem {
   id: number;
-  type: "PITCH" | "RESPONSE";
+  type: "PITCH" | "RESPONSE" | "GREET";
   text: string;
   status: "QUEUED" | "SPEAKING" | "COMPLETED";
   durationEst: number;
@@ -87,6 +87,14 @@ export class ScriptQueue {
     void this.process();
   }
 
+  addGreet(text: string, username: string) {
+    if (!this.running) return;
+    this.items.push({ id: this.nextId++, type: "GREET", text, status: "QUEUED", durationEst: estSeconds(text), respondingTo: "viewer baru: " + username });
+    this.trim();
+    this.emit();
+    void this.process();
+  }
+
   addResponse(text: string, respondingTo: string) {
     if (!this.running) return;
     this.items.push({ id: this.nextId++, type: "RESPONSE", text, status: "QUEUED", durationEst: estSeconds(text), respondingTo });
@@ -143,3 +151,4 @@ export class ScriptQueue {
     void this.process();
   }
 }
+
