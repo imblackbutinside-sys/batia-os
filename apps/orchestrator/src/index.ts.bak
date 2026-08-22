@@ -113,21 +113,20 @@ function handleJoin(uname: string) {
       if (scriptQueue.running) {
         scriptQueue.addGreet(r.content, uname);
       } else {
-        // Post-process: buang username dari greet text DULU
-        let cleanGreet = r.content;
-        const usernamePatterns = [
-          new RegExp(uname.replace(/_/g, "[\\s_]*"), "gi"),
-          new RegExp(uname.replace(/_/g, " "), "gi"),
-          /abam[_\s]*(test[_\s]*)?join/gi,
-          /test[_\s]*user/gi,
-        ];
-        for (const pattern of usernamePatterns) {
-          cleanGreet = cleanGreet.replace(pattern, "member");
-        }
-        cleanGreet = cleanGreet.replace(/\s+/g, " ").trim();
-        // Generate audio dari cleanGreet (bukan r.content)
-        const audioUrl = await tts.speak(normalizeMs(cleanGreet));
-        emitResponse({ type: "GREET", content: cleanGreet, targetUser: uname, audioUrl });
+        const audioUrl = await tts.speak(normalizeMs(r.content));
+        // Post-process: buang username dari greet text
+      let cleanGreet = r.content;
+      const usernamePatterns = [
+        new RegExp(uname.replace(/_/g, "[\\s_]*"), "gi"),
+        new RegExp(uname.replace(/_/g, " "), "gi"),
+        /abam[_\s]*(test[_\s]*)?join/gi,
+        /test[_\s]*user/gi,
+      ];
+      for (const pattern of usernamePatterns) {
+        cleanGreet = cleanGreet.replace(pattern, "member");
+      }
+      cleanGreet = cleanGreet.replace(/\s+/g, " ").trim();
+      emitResponse({ type: "GREET", content: cleanGreet, targetUser: uname, audioUrl });
       }
       console.log("[GREET] ->", uname);
     } catch (e) { console.error("[GREET] error:", e); }
@@ -500,7 +499,6 @@ io.on("connection", (socket) => {
 httpServer.listen(PORT, () => {
   console.log("BATIA Orchestrator on http://localhost:" + PORT);
 });
-
 
 
 
