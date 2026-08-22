@@ -30,6 +30,12 @@ export default function Dashboard() {
   const [musicQ, setMusicQ] = useState("");
   const [musicPaused, setMusicPaused] = useState(false);
   const [musicVolume, setMusicVolume] = useState(1);
+  const musicVolumeRef = useRef(1);
+  const [isDucking, setIsDucking] = useState(false);
+  const [autoTapEnabled, setAutoTapEnabled] = useState(false);
+  const [autoTapCount, setAutoTapCount] = useState(0);
+  const [autoTapPerMin, setAutoTapPerMin] = useState(0);
+  const [songList, setSongList] = useState<any[]>([]);
   const [music, setMusic] = useState<any>({ state: "IDLE" });
   const musicAudio = useRef<any>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -94,7 +100,7 @@ export default function Dashboard() {
 
   useEffect(() => {
     socket.on("music:status", (d: any) => {
-      setMusic(d);
+      if (d.state !== "VOLUME") setMusic((prev: any) => ({ ...prev, ...d }));
       console.log("[MUSIC-WEB] state:", d.state, "| audioFor:", d.audioFor, "| me:", socket.id, "| url:", d.url);
       if (d.state === "PLAYING" && d.url && d.audioFor !== socket.id) { console.log("[MUSIC-WEB] skip - not my sink"); return; }
       if (d.state === "PLAYING" && d.url) {
@@ -104,6 +110,7 @@ export default function Dashboard() {
         a.volume = musicVolume;
         musicAudio.current = a;
         a.onended = () => { socket.emit("music:ended", { file: d.url }); setMusic({ state: "IDLE" }); };
+        a.onplay = () => { if (isDucking) a.volume = musicVolumeRef.current * 0.2; else a.volume = musicVolumeRef.current; };
       a.onerror = () => { console.log("[MUSIC-WEB] play error", d.url); socket.emit("music:ended", { file: d.url }); setMusic({ state: "IDLE" }); };
         a.play().catch(() => {});
       }
@@ -111,8 +118,41 @@ export default function Dashboard() {
       if (d.state === "PAUSED") { if (musicAudio.current) musicAudio.current.pause(); setMusicPaused(true); }
       if (d.state === "PLAYING") { if (musicAudio.current) musicAudio.current.play().catch(() => {}); setMusicPaused(false); }
       if (d.state === "CACHE_CLEARED") { setMusic({ state: "CACHE_CLEARED", q: d.q }); }
-      if (d.state === "VOLUME") setMusicVolume(d.vol);
+      if (d.state === "VOLUME") { setMusicVolume(d.vol); musicVolumeRef.current = d.vol; }
     });
+    socket.on("music:duck", () => {
+      if (!musicAudio.current || musicPaused) return;
+      setIsDucking(true);
+      const startVol = musicAudio.current.volume;
+      const targetVol = startVol * 0.2;
+      const steps = 10;
+      const stepTime = 50;
+      let step = 0;
+      const fade = setInterval(() => {
+        step++;
+        const vol = startVol - (startVol - targetVol) * (step / steps);
+        if (musicAudio.current) musicAudio.current.volume = Math.max(0, vol);
+        if (step >= steps) clearInterval(fade);
+      }, stepTime);
+    });
+    socket.on("music:unduck", () => {
+      if (!musicAudio.current) return;
+      setIsDucking(false);
+      const startVol = musicAudio.current.volume;
+      const targetVol = musicVolumeRef.current;
+      const steps = 10;
+      const stepTime = 50;
+      let step = 0;
+      const fade = setInterval(() => {
+        step++;
+        const vol = startVol + (targetVol - startVol) * (step / steps);
+        if (musicAudio.current) musicAudio.current.volume = Math.min(targetVol, vol);
+        if (step >= steps) clearInterval(fade);
+      }, stepTime);
+    });
+    socket.on("music:queue", (l: any) => setSongList(Array.isArray(l) ? l : []));
+    socket.on("autoTap:status", (d: any) => { setAutoTapEnabled(!!d.enabled); setAutoTapCount(d.count || 0); });
+    socket.on("autoTap:tick", (d: any) => { setAutoTapCount(d.count || 0); setAutoTapPerMin(d.perMin || 0); });
     socket.on(WS_EVENTS.COMMENT_LOG, (d: any) => setComments((p) => [d, ...p].slice(0, 20)));
     socket.on(WS_EVENTS.POLICY_VIOLATION, (d: any) => setViolations((p) => [d, ...p].slice(0, 20)));
     socket.on(WS_EVENTS.APPROVAL_REQUEST, (d: any) => setApprovals((p) => [d, ...p].slice(0, 10)));
@@ -120,6 +160,7 @@ export default function Dashboard() {
       setResponses((p) => [d, ...p].slice(0, 20));
       if (d.audioUrl && soundRef.current && d.audioFor === socket.id) {
         audioQueue.current.push(d.audioUrl);
+        while (audioQueue.current.length > 3) audioQueue.current.shift();
         playNext();
       }
     });
@@ -296,9 +337,31 @@ export default function Dashboard() {
         <button onClick={() => { console.log("[MUSIC] stop click"); socket.emit("music:stop", {}); setMusicPaused(false); }} className="bg-red-700 hover:bg-red-600 px-4 py-2 rounded text-sm">Stop</button>
         <span className="text-xs text-gray-400 flex-1">{music.state === "FETCHING" ? "Sedang download..." : music.state === "PLAYING" ? (musicPaused ? "Paused: " : "Now playing: ") + music.q : music.state === "FAILED" ? "Tak jumpa lagu tu" : music.state === "CACHE_CLEARED" ? "Lagu " + music.q + " dah habis, cache dibersihkan ✓" : "ready"}</span>
         <span className="text-xs text-purple-300">{"\uD83D\uDD0A"}</span>
-        <input type="range" min={0} max={1} step={0.05} value={musicVolume} onChange={(e) => { const v = +e.target.value; setMusicVolume(v); if (musicAudio.current) musicAudio.current.volume = v; socket.emit("music:volume", { vol: v }); }} className="w-24" />
+        <input type="range" min={0} max={1} step={0.05} value={musicVolume} onChange={(e) => { const v = +e.target.value; setMusicVolume(v); musicVolumeRef.current = v; if (musicAudio.current) musicAudio.current.volume = v; socket.emit("music:volume", { vol: v }); }} className="w-24" />
         <span className="text-xs w-8">{Math.round(musicVolume * 100)}%</span>
+
       </div>
+
+      <div className="mb-4 bg-gray-900 rounded p-3 flex items-center gap-4">
+        <span className="text-sm font-semibold">{"\uD83D\uDC46"} Auto Tapper:</span>
+        <button onClick={() => socket.emit("autoTap:toggle", { enabled: !autoTapEnabled })} className={"px-4 py-2 rounded text-sm font-semibold " + (autoTapEnabled ? "bg-red-700 hover:bg-red-600" : "bg-green-700 hover:bg-green-600")}>
+          {autoTapEnabled ? "Stop Auto Tap" : "Start Auto Tap"}
+        </button>
+        <span className="text-xs text-gray-400">Total: <span className="text-teal-300 font-bold">{autoTapCount}</span></span>
+
+        <span className="text-xs text-gray-500">(AI ajak viewer tap tiap 45-90s - likes REAL)</span>
+      </div>
+
+      {songList.length > 0 && (
+        <div className="mb-6 bg-gray-900 rounded p-3">
+          <div className="text-sm font-semibold mb-2">{"\uD83C\uDFBC"} Senarai Permintaan Lagu ({songList.length})</div>
+          {songList.map((s: any, i: number) => (
+            <div key={i} className="text-xs text-gray-300 py-1 border-b border-gray-800">
+              {i + 1}. <span className="text-teal-300 font-semibold">{s.q}</span> — diminta oleh: <span className="text-amber-300">{s.by}</span>
+            </div>
+          ))}
+        </div>
+      )}
 
       <div className="grid grid-cols-3 gap-6">
         <div className="bg-gray-900 rounded p-4">
@@ -385,6 +448,18 @@ export default function Dashboard() {
     </div>
   );
 }
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

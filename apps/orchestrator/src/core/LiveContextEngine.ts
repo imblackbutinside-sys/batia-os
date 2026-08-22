@@ -1,4 +1,4 @@
-import { classifyComment, routeAIRequest, rewriteForCompliance, generateBilingualResponse, detectLang } from "../router/AIRouter.js";
+﻿import { classifyComment, routeAIRequest, rewriteForCompliance, generateBilingualResponse, detectLang } from "../router/AIRouter.js";
 import { findProducts, formatCatalogForAI } from "../catalog/ProductCatalog.js";
 import { trackViewer } from "../memory/ViewerMemory.js";
 import { PolicyEngine, PolicyViolation } from "../policy/PolicyEngine.js";
@@ -13,6 +13,8 @@ const PERSONA = [
   "JANGAN minta gift, follow, share, atau guna wang sebagai pancingan komen.",
   "Kalau soalan peribadi (alamat, gaji, pasangan), deflect dengan jenaka santai.",
   "JANGAN guna emoji, markdown, asterisk, hashtag, atau simbol khas dalam jawapan.",
+"JAWAB DENGAN 1 AYAT PENDEK SAHAJA (maksimum 15 patah perkataan) supaya cepat disebut.",
+"WAJIB sebut nama viewer (username) dalam setiap jawapan, guna perkataan seperti \"member ni\" atau sebut nama terus.",
 ].join(" ");
 
 const REGULAR_CONTEXT = "Ini SESI BORAK SANTAI (Regular Live). TIADA jualan malam ini. Kalau penonton tanya produk, harga, atau cara beli, jawab santai bahawa sekarang sesi borak, bukan sesi jualan, dan alihkan topik. JANGAN sebut harga atau buat pitch produk.";
@@ -120,3 +122,4 @@ export class LiveContextEngine {
     return r.content;
   }
 }
+

@@ -51,6 +51,21 @@ function normalizeMs(t: string): string {
     [/\b[Ee]xercise\b/g, "eksersais"],
     [/\b[Cc]onnection\b/g, "koneksyen"],
     [/\b[Ll]ink\b/g, "lingk"],
+    [/\b[Cc]hill\b/g, "cil"],
+    [/\b[Vv]ibes?\b/g, "vaibs"],
+    [/\b[Hh]angout\b/g, "hengaut"],
+    [/\b[Ss]creen\b/g, "skrin"],
+    [/\b[Ll]ike\b/g, "laik"],
+    [/\b[Ss]ales\b/g, "seil"],
+    [/\b[Tt]iktok\b/g, "tiktak"],
+    [/\b[Hh]eart\b/g, "hat"],
+    [/\b[Rr]ose\b/g, "ros"],
+    [/\b[Gg]ift\b/g, "gif"],
+    [/\b[Dd]m\b/g, "diem"],
+    [/\b[Bb]io\b/g, "baio"],
+    [/\b[Cc]omment\b/g, "komen"],
+    [/\b[Cc]hat\b/g, "cet"],
+    [/\b[Ss]tream\b/g, "strim"],
   ];
   let out = t;
   for (const [re, rep] of map) out = out.replace(re, rep);
@@ -183,6 +198,14 @@ const musicDir = path.join(process.cwd(), "audio", "music");
 
 async function fetchMusic(q: string): Promise<string | null> {
   try {
+    if (fs.existsSync(musicDir)) {
+      for (const fn of fs.readdirSync(musicDir)) {
+        if (fn.endsWith(".part")) { try { fs.unlinkSync(path.join(musicDir, fn)); } catch (e) {} }
+      }
+    }
+  } catch (e) {}
+  await new Promise((r) => setTimeout(r, 500));
+  try {
     fs.mkdirSync(musicDir, { recursive: true });
     const isUrl = /https?:\/\//.test(q);
     const ytdlp = fs.existsSync(path.join(process.cwd(), "..", "..", "tools", "yt-dlp.exe")) ? path.join(process.cwd(), "..", "..", "tools", "yt-dlp.exe") : "yt-dlp";
@@ -197,12 +220,63 @@ let lastSong = 0;
 let currentMusicFile: string | null = null;
 let lastMusicQ = "";
 let musicVolume = 1.0;
-async function playMusic(q: string) {
+let isDucking = false;
+let autoTapEnabled = false;
+let autoTapInterval: NodeJS.Timeout | null = null;
+let autoTapCount = 0;
+let autoTapThisMinute = 0;
+setInterval(() => { autoTapThisMinute = 0; }, 60000);
+
+function startAutoTap() {
+  if (autoTapInterval) clearInterval(autoTapInterval);
+  const tick = async () => {
+    if (!autoTapEnabled) return;
+
+    try {
+      const r = await routeAIRequest("CHITCHAT", [
+        { role: "system", content: "Kau host TikTok Live Malaysia yang sporting. Ajak penonton tap screen atau bagi like, 1 ayat pendek santai Bahasa Melayu pasar. JANGAN emoji, markdown, asterisk." },
+        { role: "user", content: "Ajak penonton tap screen sekarang" },
+      ]);
+      const audioUrl = await tts.speak(normalizeMs(r.content));
+      emitResponse({ type: "AUTO_TAP", content: r.content, targetUser: "SEMUA", audioUrl });
+      autoTapCount++;
+      io.emit("autoTap:tick", { count: autoTapCount, perMin: 0 });
+    } catch (e) {}
+    const next = 45000 + Math.floor(Math.random() * 45000);
+    autoTapInterval = setTimeout(tick, next) as unknown as NodeJS.Timeout;
+  };
+  const first = 5000;
+  autoTapInterval = setTimeout(tick, first) as unknown as NodeJS.Timeout;
+}
+
+function stopAutoTap() {
+  if (autoTapInterval) { clearTimeout(autoTapInterval); clearInterval(autoTapInterval); autoTapInterval = null; }
+}
+let songQueue: { q: string; by: string }[] = [];
+let songPlaying = false;
+function emitSongQueue() { io.emit("music:queue", songQueue); }
+async function processSongQueue() {
+  if (songPlaying || songQueue.length === 0) return;
+  const next = songQueue.shift();
+  if (!next) return;
+  emitSongQueue();
+  songPlaying = true;
+  const ok = await playMusic(next.q);
+  if (!ok) { songPlaying = false; void processSongQueue(); }
+}
+async function enqueueSong(q: string, by: string) {
+  if (songQueue.length >= 5) return;
+  songQueue.push({ q, by });
+  emitSongQueue();
+  void processSongQueue();
+}
+async function playMusic(q: string): Promise<boolean> {
   const sink = audioSink ? audioSink.id : null;
   io.emit("music:status", { state: "FETCHING", q, audioFor: sink });
   const url = await fetchMusic(q);
   if (url) { currentMusicFile = path.join(musicDir, path.basename(url)); lastMusicQ = q; io.emit("music:status", { state: "PLAYING", q, url: "http://localhost:4000" + url, audioFor: sink }); }
   else io.emit("music:status", { state: "FAILED", q, audioFor: sink });
+  return !!url;
 }
 
 httpServer.on("request", (req, res) => {
@@ -250,9 +324,15 @@ async function processComment(username: string, text: string) {
     commentTimes.push(Date.now());
     liveStats.comments++;
     io.emit(WS_EVENTS.COMMENT_LOG, { username, text });
+    if (currentMode === "REGULAR" && songPlaying && !isDucking) {
+      isDucking = true;
+      io.emit("music:duck", {});
+      console.log("[MUSIC] duck volume for comment response");
+      setTimeout(() => { if (isDucking) { isDucking = false; io.emit("music:unduck", {}); console.log("[MUSIC] auto-unduck (timer)"); } }, 8000);
+    }
     if (false) {
       const nowS = Date.now();
-      if (nowS - lastSong > 60000) {
+      if (nowS - lastSong > 10000) {
         lastSong = nowS;
         void (async () => { let q = ""; try { const r = await routeAIRequest("CHITCHAT", [{ role: "system", content: "Ekstrak tajuk lagu daripada komen penonton. Jawab DENGAN tajuk lagu sahaja (serta artis jika disebut). Tiada ayat lain, tiada tanda petik." }, { role: "user", content: text }]); q = r.content.replace(/"/g, "").trim(); } catch (e) {} if (!q) q = text.replace(/[?!.]/g, "").replace(/\b(boleh|tak|nak|request|req|lagu|nyanyi|play|putar|sikit|bang|kak|main)\b/gi, "").trim() || text; playMusic(q); })();
 
@@ -336,18 +416,33 @@ io.on("connection", (socket) => {
     if (t) { scriptQueue.addPitch(t); console.log("[INTERJECT] queued:", t); }
   });
   socket.on("test:join", () => handleJoin("abam_test_join"));
-  socket.on("music:play", (d: any) => { const q = String((d && d.q) || "").trim(); if (q) void playMusic(q); });
+  socket.on("music:play", (d: any) => { const q = String((d && d.q) || "").trim(); if (q) void enqueueSong(q, "host"); });
+  socket.on("autoTap:toggle", (d: any) => {
+    autoTapEnabled = !!(d && d.enabled);
+    if (autoTapEnabled) { autoTapCount = 0; startAutoTap(); console.log("[AUTO-TAP] started"); }
+    else { stopAutoTap(); console.log("[AUTO-TAP] stopped"); }
+    io.emit("autoTap:status", { enabled: autoTapEnabled, count: autoTapCount });
+  });
   socket.on("music:pause", () => io.emit("music:status", { state: "PAUSED" }));
   socket.on("music:resume", () => io.emit("music:status", { state: "PLAYING" }));
   socket.on("music:volume", (d: any) => { musicVolume = Math.max(0, Math.min(1, Number(d && d.vol) || 1)); io.emit("music:status", { state: "VOLUME", vol: musicVolume }); });
+  socket.on("music:unduck", () => {
+    if (isDucking) {
+      isDucking = false;
+      io.emit("music:unduck", {});
+      console.log("[MUSIC] unduck volume");
+    }
+  });
   socket.on("music:stop", () => {
     try { if (currentMusicFile && fs.existsSync(currentMusicFile)) { fs.unlinkSync(currentMusicFile); console.log("[MUSIC] stop-delete:", path.basename(currentMusicFile)); } } catch (e) {}
     currentMusicFile = null;
+    songPlaying = false; void processSongQueue();
     io.emit("music:status", { state: "STOPPED" });
   });
   socket.on("music:ended", (d: any) => {
     try {
       if (d && d.file) { const p = path.join(musicDir, path.basename(String(d.file))); if (fs.existsSync(p)) { fs.unlinkSync(p); console.log("[MUSIC] cache deleted:", path.basename(p)); io.emit("music:status", { state: "CACHE_CLEARED", q: lastMusicQ }); } }
+    songPlaying = false; void processSongQueue();
     } catch (e) {}
   });
   socket.on("shop:config", async (d: { description: string; sellingPoints: string[]; promoValue?: string; promoCode?: string }) => {
@@ -390,6 +485,16 @@ io.on("connection", (socket) => {
 httpServer.listen(PORT, () => {
   console.log("BATIA Orchestrator on http://localhost:" + PORT);
 });
+
+
+
+
+
+
+
+
+
+
 
 
 
