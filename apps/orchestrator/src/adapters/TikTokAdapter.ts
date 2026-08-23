@@ -20,13 +20,13 @@ export class TikTokAdapter {
 
     let lastComment = 0;
 
-    this.conn.on("chat", (data: any) => {
+    this.conn.on("chat", (data: any) => { // console.log("[TikTok RAW] Full data:", JSON.stringify(data)); // Debug disabled
       try {
-        const text = data.comment || "";
-        const uname = data.user?.uniqueId || data.user?.nickname || data.uniqueId || data.username || "viewer";
+        const text = data.content || data.comment || "";
+        const uname = data.user?.uniqueId || data.user?.displayId || data.user?.nickname || data.uniqueId || data.username || "viewer";
         if (!text || !String(text).trim()) return;
         const now = Date.now();
-        if (now - lastComment < 2000) return;
+        if (now - lastComment < 500) return; // Kurangkan throttle
         lastComment = now;
         console.log("[TikTok] chat:", uname, ":", text);
         handlers.onComment(String(uname), String(text));
@@ -70,9 +70,9 @@ export class TikTokAdapter {
       handlers.onStatus("STREAM_END");
     });
 
-    this.conn.on("disconnected", () => {
+    this.conn.on("disconnected", () => { console.log("[TikTok] Terputus! Cuba connect semula dalam 5 saat...");
       this.connected = false;
-      handlers.onStatus("DISCONNECTED");
+      handlers.onStatus("DISCONNECTED"); setTimeout(() => this.connect(username, handlers), 5000);
     });
 
     try {
@@ -97,3 +97,9 @@ export class TikTokAdapter {
     this.connected = false;
   }
 }
+
+
+
+
+
+

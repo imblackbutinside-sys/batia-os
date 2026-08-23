@@ -222,11 +222,29 @@ async function fetchMusic(q: string): Promise<string | null> {
     fs.mkdirSync(musicDir, { recursive: true });
     const isUrl = /https?:\/\//.test(q);
     const ytdlp = fs.existsSync(path.join(process.cwd(), "..", "..", "tools", "yt-dlp.exe")) ? path.join(process.cwd(), "..", "..", "tools", "yt-dlp.exe") : "yt-dlp";
-    const args = [isUrl ? q : "ytsearch1:" + q, "-f", "bestaudio/best", "-o", path.join(musicDir, "%(id)s.%(ext)s"), "--no-playlist", "--quiet", "--no-warnings"];
+    const args = [isUrl ? q : "ytsearch1:" + q, "-f", "bestaudio/best", "-o", path.join(musicDir, "%(id)s.%(ext)s"), "--no-playlist", "--quiet", "--no-warnings", "--no-part"];
     await execFileAsync(ytdlp, args, { timeout: 60000 });
     const files = fs.readdirSync(musicDir).map((fn) => ({ fn, t: fs.statSync(path.join(musicDir, fn)).mtimeMs })).sort((a, b) => b.t - a.t);
     return files[0] ? "/music/" + files[0].fn : null;
-  } catch (e) { console.error("[MUSIC] fetch error:", e); return null; }
+  } catch (e: any) { 
+      const errMsg = e.message || String(e);
+      if (errMsg.includes("Video unavailable") || errMsg.includes("disabled by the video owner")) {
+        console.warn("[MUSIC] Video disekat oleh pemilik, skip lagu ni:", q);
+      } else if (errMsg.includes("HTTP Error 416")) {
+        console.warn("[MUSIC] Cache rosak atau YouTube block, cuba clear cache...");
+        // Clear yt-dlp cache
+        try {
+          const cacheDir = path.join(process.cwd(), "audio", "music", ".cache");
+          if (fs.existsSync(cacheDir)) {
+            fs.rmSync(cacheDir, { recursive: true, force: true });
+            console.log("[MUSIC] Cache cleared");
+          }
+        } catch (e2) {}
+      } else {
+        console.error("[MUSIC] fetch error:", errMsg);
+      }
+      return null; 
+    }
 }
 
 let lastSong = 0;
@@ -277,7 +295,11 @@ async function processSongQueue() {
   emitSongQueue();
   songPlaying = true;
   const ok = await playMusic(next.q);
-  if (!ok) { songPlaying = false; void processSongQueue(); }
+  if (!ok) { 
+    console.log("[MUSIC] Lagu gagal download, auto-skip ke seterusnya...");
+    songPlaying = false; 
+    void processSongQueue(); 
+  }
 }
 async function enqueueSong(q: string, by: string) {
   if (songQueue.length >= 5) return;
@@ -345,11 +367,11 @@ async function processComment(username: string, text: string) {
       console.log("[MUSIC] duck volume for comment response");
       setTimeout(() => { if (isDucking) { isDucking = false; io.emit("music:unduck", {}); console.log("[MUSIC] auto-unduck (timer)"); } }, 8000);
     }
-    if (false) {
+    if (true) { // Auto song request ENABLED
       const nowS = Date.now();
       if (nowS - lastSong > 10000) {
         lastSong = nowS;
-        void (async () => { let q = ""; try { const r = await routeAIRequest("CHITCHAT", [{ role: "system", content: "Ekstrak tajuk lagu daripada komen penonton. Jawab DENGAN tajuk lagu sahaja (serta artis jika disebut). Tiada ayat lain, tiada tanda petik." }, { role: "user", content: text }]); q = r.content.replace(/"/g, "").trim(); } catch (e) {} if (!q) q = text.replace(/[?!.]/g, "").replace(/\b(boleh|tak|nak|request|req|lagu|nyanyi|play|putar|sikit|bang|kak|main)\b/gi, "").trim() || text; playMusic(q); })();
+        void (async () => { let q = ""; try { const r = await routeAIRequest("CHITCHAT", [{ role: "system", content: "Ekstrak tajuk lagu daripada komen penonton. Jawab DENGAN tajuk lagu sahaja (serta artis jika disebut). Tiada ayat lain, tiada tanda petik. Jika TIADA tajuk lagu spesifik disebut, jawab tepat: NONE" }, { role: "user", content: text }]); q = r.content.replace(/"/g, "").trim(); } catch (e) {} if (!q) q = text.replace(/[?!.]/g, "").replace(/\b(boleh|tak|nak|request|req|lagu|nyanyi|play|putar|sikit|bang|kak|main)\b/gi, "").trim() || text; if (!q || /NONE|TIADA|TIDAK|NO SONG|NOT MENTIONED|TAK ADA/i.test(q)) { console.log("[MUSIC] Komen tiada tajuk lagu spesifik - skip auto-play"); } else { console.log("[MUSIC] Auto-play:", q); playMusic(q); } })();
 
       }
     }
@@ -500,6 +522,11 @@ io.on("connection", (socket) => {
 httpServer.listen(PORT, () => {
   console.log("BATIA Orchestrator on http://localhost:" + PORT);
 });
+
+
+
+
+
 
 
 
