@@ -322,8 +322,18 @@ httpServer.on("request", (req, res) => {
     if (fs.existsSync(file)) {
       const ext = path.extname(file).toLowerCase();
       const mime = ext === ".webm" ? "audio/webm" : ext === ".m4a" ? "audio/mp4" : ext === ".opus" ? "audio/opus" : ext === ".mp3" ? "audio/mpeg" : "audio/mpeg";
-      res.writeHead(200, { "Content-Type": mime, "Accept-Ranges": "bytes" });
-      fs.createReadStream(file).pipe(res);
+      const stat = fs.statSync(file);
+      const range = req.headers.range;
+      if (range) {
+        const parts = range.replace(/bytes=/, "").split("-");
+        const start = parseInt(parts[0], 10) || 0;
+        const end = parts[1] ? parseInt(parts[1], 10) : stat.size - 1;
+        res.writeHead(206, { "Content-Range": "bytes " + start + "-" + end + "/" + stat.size, "Accept-Ranges": "bytes", "Content-Length": end - start + 1, "Content-Type": mime });
+        fs.createReadStream(file, { start, end }).pipe(res);
+      } else {
+        res.writeHead(200, { "Content-Length": stat.size, "Content-Type": mime, "Accept-Ranges": "bytes" });
+        fs.createReadStream(file).pipe(res);
+      }
       return;
     }
     res.writeHead(404);
@@ -334,8 +344,18 @@ httpServer.on("request", (req, res) => {
     if (fs.existsSync(file)) {
       const ext = path.extname(file).toLowerCase();
       const mime = ext === ".webm" ? "audio/webm" : ext === ".m4a" ? "audio/mp4" : ext === ".opus" ? "audio/opus" : ext === ".mp3" ? "audio/mpeg" : "audio/mpeg";
-      res.writeHead(200, { "Content-Type": mime, "Accept-Ranges": "bytes" });
-      fs.createReadStream(file).pipe(res);
+      const stat = fs.statSync(file);
+      const range = req.headers.range;
+      if (range) {
+        const parts = range.replace(/bytes=/, "").split("-");
+        const start = parseInt(parts[0], 10) || 0;
+        const end = parts[1] ? parseInt(parts[1], 10) : stat.size - 1;
+        res.writeHead(206, { "Content-Range": "bytes " + start + "-" + end + "/" + stat.size, "Accept-Ranges": "bytes", "Content-Length": end - start + 1, "Content-Type": mime });
+        fs.createReadStream(file, { start, end }).pipe(res);
+      } else {
+        res.writeHead(200, { "Content-Length": stat.size, "Content-Type": mime, "Accept-Ranges": "bytes" });
+        fs.createReadStream(file).pipe(res);
+      }
       return;
     }
     res.writeHead(404);
@@ -522,6 +542,7 @@ io.on("connection", (socket) => {
 httpServer.listen(PORT, () => {
   console.log("BATIA Orchestrator on http://localhost:" + PORT);
 });
+
 
 
 
