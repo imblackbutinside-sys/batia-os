@@ -2,7 +2,8 @@
   "name": "@batia/orchestrator",
   "version": "1.0.0",
   "type": "module",
-  "scripts": { "seed": "tsx src/seed.ts",
+  "scripts": {
+    "seed": "tsx src/seed.ts",
     "dev": "tsx watch src/index.ts"
   },
   "dependencies": {
@@ -10,6 +11,7 @@
     "@batia/shared": "workspace:*",
     "dotenv": "^16.4.5",
     "js-yaml": "^4.1.0",
+    "microsoft-cognitiveservices-speech-sdk": "^1.51.0",
     "node-edge-tts": "^1.2.10",
     "socket.io": "^4.7.5",
     "tiktok-live-connector": "^2.4.3"
@@ -21,4 +23,3 @@
     "typescript": "^5.6.0"
   }
 }
-
