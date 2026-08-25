@@ -22,7 +22,6 @@ const policyPath = path.resolve(__dirname, "../../../policies/tiktok_my_2026.yam
 
 const engine = new LiveContextEngine(new PolicyEngine(policyPath));
 
-// ===== STARTUP CLEANUP =====
 try {
   const audioDir = path.join(process.cwd(), "audio");
   if (fs.existsSync(audioDir)) {
@@ -36,7 +35,6 @@ try {
   }
 } catch (e) {}
 
-// ===== DEDUP KOMEN (10s) =====
 const recentComments = new Map<string, { text: string; at: number }>();
 function isDuplicateComment(username: string, text: string): boolean {
   const now = Date.now();
@@ -49,7 +47,6 @@ function isDuplicateComment(username: string, text: string): boolean {
   return false;
 }
 
-// ===== DEDUP RESPONSE (5s) =====
 const recentResponses = new Map<string, number>();
 function isDuplicateResponse(text: string): boolean {
   const now = Date.now();
@@ -65,15 +62,10 @@ function isDuplicateResponse(text: string): boolean {
   return false;
 }
 
-// ===== FUZZY DEDUP TTS (fix audio ulang) =====
 const recentTtsRequests = new Map<string, number>();
 
 function normalizeForDedup(text: string): string {
-  return text
-    .toLowerCase()
-    .replace(/[^\w\s]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
+  return text.toLowerCase().replace(/[^\w\s]/g, '').replace(/\s+/g, ' ').trim();
 }
 
 function calculateSimilarity(s1: string, s2: string): number {
@@ -115,7 +107,6 @@ function isDuplicateTts(text: string, lang: string): boolean {
   return false;
 }
 
-// ===== NORMALIZATION =====
 function normalizeMs(t: string): string {
   const map: [RegExp, string][] = [
     [/\b[Yy]e\b/g, "ya"],
@@ -131,12 +122,12 @@ function normalizeMs(t: string): string {
   return out;
 }
 
-// ===== CLEAN AI OUTPUT =====
 function cleanAiOutput(text: string): string {
   let clean = text;
   clean = clean.replace(/Mah-lay-see-ah/gi, "Malaysia");
   clean = clean.replace(/Mah-lay-sia/gi, "Malaysia");
   clean = clean.replace(/Ma-lay-see-ah/gi, "Malaysia");
+  clean = clean.replace(/Tick[\s-]*Tock/gi, "TikTok");
   clean = clean.replace(/Tik-tok/gi, "TikTok");
   clean = clean.replace(/Tik-Tok/gi, "TikTok");
   clean = clean.replace(/Live-stream/gi, "live stream");
@@ -144,17 +135,36 @@ function cleanAiOutput(text: string): string {
   return clean;
 }
 
+function isValidUsername(uname: string): boolean {
+  if (!uname || uname === "0" || uname === "unknown" || uname.length < 3) {
+    return false;
+  }
+  return true;
+}
+
+function cleanSongTitle(q: string): string {
+  let clean = q
+    .replace(/^["'""''\s]+|["'""''\s]+$/g, "")
+    .replace(/^[-–—:\s]+|[-–—:\s]+$/g, "")
+    .replace(/\s*\([^)]*\)\s*/g, " ")
+    .replace(/\s*oleh\s+.+$/i, "")
+    .replace(/\s*by\s+.+$/i, "")
+    .replace(/\s*feat\.?\s+.+$/i, "")
+    .replace(/\s*-\s*.*$/, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return clean;
+}
+
 const tts = new TtsEngine();
 let currentTtsVoice = "ms-MY-YasminNeural";
 
-// ===== VOICE IKUT PILIHAN USER =====
 function getVoiceForLang(lang: "MS" | "EN"): string {
   const isMale = /osman|guy|male/i.test(currentTtsVoice);
   if (lang === "EN") return isMale ? "en-US-GuyNeural" : "en-US-JennyNeural";
   return isMale ? "ms-MY-OsmanNeural" : "ms-MY-YasminNeural";
 }
 
-// ===== TTS QUEUE =====
 const ttsQueue: Array<{ 
   text: string; 
   voiceName: string; 
@@ -164,7 +174,6 @@ const ttsQueue: Array<{
 }> = [];
 let ttsBusy = false;
 
-// FIXED: FORCE setVoice SETIAP KALI
 async function processTtsQueue() {
   if (ttsBusy) return;
   ttsBusy = true;
@@ -176,7 +185,6 @@ async function processTtsQueue() {
         await tts.setVoice(job.voiceName);
         currentTtsVoice = job.voiceName;
         await new Promise(r => setTimeout(r, 200));
-        
         const audioUrl = await tts.speak(job.text);
         job.resolve(audioUrl);
       } catch (e) {
@@ -200,17 +208,12 @@ async function speakMixed(text: string, forceLang?: "MS" | "EN"): Promise<string
     const englishRatio = englishWords.length / words.length;
     lang = (hasEnglishKeywords || englishRatio > 0.6) && words.length > 3 ? "EN" : "MS";
   }
-  
   if (isDuplicateTts(cleanedText, lang)) {
     return "";
   }
-  
   return new Promise((resolve, reject) => {
     const normalizedText = lang === "MS" ? normalizeMs(cleanedText) : cleanedText;
     const voiceName = getVoiceForLang(lang);
-    
-    console.log(`[TTS] lang=${lang} voice=${voiceName} (currentTtsVoice=${currentTtsVoice}): ${normalizedText.slice(0, 80)}`);
-    
     ttsQueue.push({ text: normalizedText, voiceName, lang, resolve, reject });
     processTtsQueue();
   });
@@ -244,9 +247,16 @@ let pitchIdx = 0;
 let lastPitch = Date.now() - 200000;
 let lastGreet = 0;
 
+const lastCommentTime: Record<string, number> = {};
+
 function handleJoin(uname: string) {
+  if (!isValidUsername(uname)) {
+    return;
+  }
   const now = Date.now();
-  if (now - lastGreet < 25000) return;
+  if (now - lastGreet < 25000) {
+    return;
+  }
   lastGreet = now;
   void (async () => {
     try {
@@ -442,7 +452,6 @@ function stopAutoTap() {
   if (autoTapInterval) { clearTimeout(autoTapInterval); clearInterval(autoTapInterval); autoTapInterval = null; }
 }
 
-// ===== SONG QUEUE =====
 let songQueue: { q: string; by: string }[] = [];
 let songPlaying = false;
 
@@ -494,17 +503,25 @@ async function playNextInQueue() {
 }
 
 async function enqueueSong(q: string, by: string) {
-  if (songQueue.length >= 5) return;
-  if (songQueue.some(s => s.q.toLowerCase() === q.toLowerCase())) {
-    console.log(`[MUSIC] Duplicate request skipped: ${q}`);
+  const cleanQ = cleanSongTitle(q);
+  console.log(`[MUSIC] Input: "${q}" → Clean: "${cleanQ}"`);
+  
+  if (!cleanQ || cleanQ.length < 2) {
+    console.log(`[MUSIC] Skip - invalid title after clean`);
     return;
   }
-  songQueue.push({ q, by });
-  emitSongQueue();
-  console.log(`[MUSIC] Song queued: ${q} (by ${by}). Queue size: ${songQueue.length}`);
-  if (!songPlaying) {
-    void playNextInQueue();
+  if (songQueue.length >= 5) {
+    console.log(`[MUSIC] Queue penuh (5), discard: ${cleanQ}`);
+    return;
   }
+  if (songQueue.some(s => s.q.toLowerCase() === cleanQ.toLowerCase())) {
+    console.log(`[MUSIC] Duplicate skipped: ${cleanQ}`);
+    return;
+  }
+  songQueue.push({ q: cleanQ, by });
+  emitSongQueue();
+  console.log(`[MUSIC] Queued: "${cleanQ}" by ${by}. Size: ${songQueue.length}`);
+  if (!songPlaying) void playNextInQueue();
 }
 
 httpServer.on("request", (req, res) => {
@@ -578,7 +595,6 @@ function isValidSongTitle(title: string): boolean {
   return true;
 }
 
-// ===== REGULAR MODE FILTER =====
 function sanitizeForRegularMode(text: string): string {
   let clean = text;
   const salesPatterns = [
@@ -602,6 +618,16 @@ function sanitizeForRegularMode(text: string): string {
 }
 
 async function processComment(username: string, text: string) {
+  if (!username || username === "unknown" || username === "0" || username.length < 3) {
+    return;
+  }
+  
+  const now = Date.now();
+  if (lastCommentTime[username] && now - lastCommentTime[username] < 500) {
+    return;
+  }
+  lastCommentTime[username] = now;
+  
   try {
     if (isDuplicateComment(username, text)) return;
     const session = await ensureSession();
@@ -611,12 +637,10 @@ async function processComment(username: string, text: string) {
     if (songPlaying && !isDucking) {
       isDucking = true;
       io.emit("music:duck", {});
-      console.log("[MUSIC] duck volume for comment response");
       setTimeout(() => { 
         if (isDucking) { 
           isDucking = false; 
           io.emit("music:unduck", {}); 
-          console.log("[MUSIC] auto-unduck (timer)"); 
         } 
       }, 8000);
     }
@@ -624,7 +648,6 @@ async function processComment(username: string, text: string) {
     const skipPatterns = /^(skip|cancel|taknak|tak nak|next|stop lagu|batal|batal kan|next song|skip lagu)$/i;
     if (skipPatterns.test(lowerText) || lowerText.includes("skip") || lowerText.includes("cancel lagu") || lowerText.includes("taknak lagu")) {
       if (songPlaying || songQueue.length > 0) {
-        console.log(`[MUSIC] Skip command from ${username}`);
         const skipMsg = `Ok ${username}, lagu di-skip!`;
         const audioUrl = await speakMixed(skipMsg, "MS");
         if (audioUrl) {
@@ -634,37 +657,50 @@ async function processComment(username: string, text: string) {
         return;
       }
     }
+    
+    // FIXED: Song request - await extraction, respond kalau tiada tajuk
     let handledByMusic = false;
     const nowS = Date.now();
-    const explicitRequestPattern = /\b(mainkan|main kan|play|pasang|bagi|request|nak dengar|minta)\s+(lagu\s+)?[A-Z]/i;
-    const directRequestPattern = /\b(lagu|play|mainkan)\s+[A-Z][a-zA-Z\s'-]{2,}/i;
+    const explicitRequestPattern = /\b(mainkan|play|pasang|putar|nyanyi|request|req|minta lagu|nak dengar lagu|bagi lagu|on kan lagu|bukak lagu)\s+(lagu\s+)?[a-zA-Z0-9]/i;
+    const directRequestPattern = /\blagu\s+[a-zA-Z0-9][a-zA-Z0-9\s'-]{2,}/i;
     if (nowS - lastSong > 10000 && (explicitRequestPattern.test(text) || directRequestPattern.test(text))) {
       lastSong = nowS;
-      handledByMusic = true;
-      void (async () => {
-        let q = "";
-        try {
-          const r = await routeAIRequest("CHITCHAT", [{ 
-            role: "system", 
-            content: "Ekstrak tajuk lagu daripada komen penonton. Jawab DENGAN tajuk lagu sahaja (serta artis jika disebut). Tiada ayat lain, tiada tanda petik. Jika TIADA tajuk lagu spesifik disebut, jawab tepat: NONE" 
-          }, { role: "user", content: text }]);
-          q = r.content.replace(/"/g, "").trim();
-        } catch (e) {}
-        if (!q || q === "NONE" || !isValidSongTitle(q)) {
-          console.log("[MUSIC] Invalid song title extracted, skip");
-          return;
-        }
-        console.log("[MUSIC] Valid song request:", q);
+      let q = "";
+      try {
+        const r = await routeAIRequest("CHITCHAT", [{ 
+          role: "system", 
+          content: "Ekstrak tajuk lagu daripada komen penonton. Jawab DENGAN tajuk lagu sahaja (serta artis jika disebut). Tiada ayat lain, tiada tanda petik. Jika TIADA tajuk lagu spesifik disebut, jawab tepat: NONE" 
+        }, { role: "user", content: text }]);
+        q = r.content
+          .replace(/^["'""''\s]+|["'""''\s]+$/g, "")
+          .replace(/^[-–—\s]+|[-–—\s]+$/g, "")
+          .replace(/\s*\([^)]*\)\s*/g, " ")
+          .replace(/\s*oleh\s+.+$/i, "")
+          .replace(/\s*by\s+.+$/i, "")
+          .replace(/\s*feat\.?\s+.+$/i, "")
+          .replace(/\s+/g, " ")
+          .trim();
+        console.log("[MUSIC] AI extracted:", JSON.stringify(q));
+      } catch (e) {
+        console.error("[MUSIC] AI extraction error:", e);
+      }
+      
+      if (q && q !== "NONE" && q.length >= 2 && isValidSongTitle(q)) {
+        handledByMusic = true;
         enqueueSong(q, username);
-      })();
+        const confirmMsg = `Ok ${username}, lagu ${q} masuk queue!`;
+        const audioUrl = await speakMixed(confirmMsg, "MS");
+        if (audioUrl) {
+          emitResponse({ type: "SONG_CONFIRM", content: confirmMsg, targetUser: username, audioUrl });
+        }
+      }
     }
+    
     const simplePatterns = /^(haha+|hehe+|hihi+|lol|lmao|ok|okay|yes|no|ya|tak|yeap|yup|nice|good|best|mantap|power|ngam+)$/i;
     if (simplePatterns.test(text.trim())) {
-      console.log("[CHAT] Simple comment - skip AI");
       return;
     }
     if (handledByMusic) {
-      console.log("[MUSIC] Skip AI response - song request in progress");
       return;
     }
     const commentLang = detectLang(text);
@@ -682,7 +718,6 @@ async function processComment(username: string, text: string) {
               { role: "user", content: text },
             ]);
             cleanResponse = r.content;
-            console.log("[ENGINE] Regenerated EN response:", cleanResponse.slice(0, 60));
           } catch (e) {}
         }
       }
@@ -729,7 +764,6 @@ io.on("connection", (socket) => {
   emitProduct();
   socket.on(WS_EVENTS.AUDIO_CLAIM, (data: { label: string }) => {
     audioSink = { id: socket.id, label: data.label };
-    console.log("[WS] audio sink ->", data.label);
     io.emit(WS_EVENTS.AUDIO_ROUTE, { id: socket.id, label: data.label });
   });
   socket.on(WS_EVENTS.COMMENT_RECEIVED, (data: { username: string; text: string }) => {
@@ -769,7 +803,7 @@ io.on("connection", (socket) => {
   socket.on("shop:settings", (d: any) => scriptQueue.setSettings(d || {}));
   socket.on("shop:interject", (d: any) => {
     const t = String((d && d.text) || "").trim();
-    if (t) { scriptQueue.addPitch(t); console.log("[INTERJECT] queued:", t); }
+    if (t) { scriptQueue.addPitch(t); }
   });
   socket.on("test:join", () => handleJoin("abam_test_join"));
   socket.on("music:play", (d: any) => { 
@@ -777,13 +811,12 @@ io.on("connection", (socket) => {
     if (q) void enqueueSong(q, "host"); 
   });
   socket.on("music:skip", () => {
-    console.log("[MUSIC] Skip from dashboard");
     skipCurrentSong();
   });
   socket.on("autoTap:toggle", (d: any) => {
     autoTapEnabled = !!(d && d.enabled);
-    if (autoTapEnabled) { autoTapCount = 0; startAutoTap(); console.log("[AUTO-TAP] started"); }
-    else { stopAutoTap(); console.log("[AUTO-TAP] stopped"); }
+    if (autoTapEnabled) { autoTapCount = 0; startAutoTap(); }
+    else { stopAutoTap(); }
     io.emit("autoTap:status", { enabled: autoTapEnabled, count: autoTapCount });
   });
   socket.on("music:pause", () => io.emit("music:status", { state: "PAUSED" }));
@@ -793,14 +826,12 @@ io.on("connection", (socket) => {
     if (isDucking) {
       isDucking = false;
       io.emit("music:unduck", {});
-      console.log("[MUSIC] unduck volume");
     }
   });
   socket.on("music:stop", () => {
     try { 
       if (currentMusicFile && fs.existsSync(currentMusicFile)) { 
         fs.unlinkSync(currentMusicFile); 
-        console.log("[MUSIC] stop-delete:", path.basename(currentMusicFile)); 
       } 
     } catch (e) {}
     currentMusicFile = null;
@@ -816,11 +847,9 @@ io.on("connection", (socket) => {
         const p = path.join(musicDir, path.basename(String(d.file))); 
         if (fs.existsSync(p)) { 
           fs.unlinkSync(p); 
-          console.log("[MUSIC] cache deleted:", path.basename(p)); 
           io.emit("music:status", { state: "CACHE_CLEARED", q: lastMusicQ }); 
         } 
       }
-      console.log("[MUSIC] Song finished, unlocking...");
       songPlaying = false;
       setTimeout(() => void playNextInQueue(), 500);
     } catch (e) {
@@ -838,16 +867,14 @@ io.on("connection", (socket) => {
     } catch (e) { console.error("[SHOP] config error:", e); }
   });
   socket.on(WS_EVENTS.APPROVAL_DECISION, async (data: { id: string; decision: "approved" | "rejected"; finalText?: string; username?: string }) => {
-    console.log("[WS] approval decision:", data.decision, data.id);
     let log: any = null;
-    try { log = await prisma.violationLog.findUnique({ where: { id: data.id } }); } catch (e) { console.error("[WS] log lookup failed:", e); }
+    try { log = await prisma.violationLog.findUnique({ where: { id: data.id } }); } catch (e) {}
     try {
       if (data.decision === "approved") {
         const text = data.finalText || (log ? log.resolvedText : null) || (log ? log.triggeredText : null) || "ok, terima!";
         if (log) await prisma.violationLog.update({ where: { id: data.id }, data: { humanResolved: true, resolvedText: text } }).catch(() => {});
         const audioUrl = await speakMixed(text);
         if (audioUrl) {
-          console.log("[WS] approved, audioUrl:", audioUrl);
           emitResponse({ type: "APPROVED_RESPONSE", content: text, targetUser: data.username || "viewer", audioUrl });
         }
       } else {
@@ -860,12 +887,10 @@ io.on("connection", (socket) => {
   socket.on(WS_EVENTS.MODE_CHANGED, (data: { mode: "REGULAR" | "SHOPPABLE" }) => {
     engine.setMode(data.mode);
     currentMode = data.mode;
-    console.log("[Engine] mode ->", data.mode);
   });
   socket.on(WS_EVENTS.VOICE_CHANGED, async (data: { voice: string }) => {
     await tts.setVoice(data.voice);
     currentTtsVoice = data.voice;
-    console.log("[TTS] User selected voice:", data.voice);
   });
 });
 

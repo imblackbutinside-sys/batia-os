@@ -14,6 +14,7 @@
     "microsoft-cognitiveservices-speech-sdk": "^1.51.0",
     "node-edge-tts": "^1.2.10",
     "socket.io": "^4.7.5",
+    "socket.io-client": "^4.8.3",
     "tiktok-live-connector": "^2.4.3"
   },
   "devDependencies": {

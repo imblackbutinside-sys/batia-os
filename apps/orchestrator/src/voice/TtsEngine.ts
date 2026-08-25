@@ -114,7 +114,10 @@ export class TtsEngine {
     this.voice = process.env.EDGE_TTS_VOICE || "ms-MY-YasminNeural";
     this.dir = path.join(process.cwd(), "audio");
     fs.mkdirSync(this.dir, { recursive: true });
-    this.getInstance(this.voice).then(() => console.log("[TTS] ready:", this.voice)).catch((e) => console.error("[TTS] disabled:", e));
+    console.log("[TTS] Audio directory:", this.dir);
+    this.getInstance(this.voice)
+      .then(() => console.log("[TTS] ready:", this.voice))
+      .catch((e) => console.error("[TTS] disabled:", e));
   }
 
   private async getInstance(voice: string): Promise<any> {
@@ -128,7 +131,12 @@ export class TtsEngine {
 
   async setVoice(voice: string) {
     this.voice = voice;
-    try { await this.getInstance(voice); console.log("[TTS] voice switched to:", voice); } catch (e) {}
+    try {
+      await this.getInstance(voice);
+      console.log("[TTS] voice switched to:", voice);
+    } catch (e: any) {
+      console.error("[TTS] setVoice error:", e.message);
+    }
   }
 
   async speak(text: string): Promise<string | null> {
@@ -136,6 +144,7 @@ export class TtsEngine {
     const voice = lang === "EN" ? (EN_VOICE[this.voice] || "en-US-JennyNeural") : this.voice;
     const spoken = lang === "MS" ? casualize(text) : englishize(text);
     console.log("[TTS] lang=" + lang + " voice=" + voice + ":", spoken.slice(0, 80));
+
     const clean = spoken
       .replace(/[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]+/g, "")
       .replace(/[\u0600-\u06ff]+/g, "")
@@ -143,20 +152,43 @@ export class TtsEngine {
       .replace(/[^\p{L}\p{N}\s.,!?']/gu, "")
       .replace(/\s+/g, " ")
       .trim();
+
+    if (!clean) {
+      console.warn("[TTS] ⚠️ Empty clean text, skip");
+      return null;
+    }
+
     const id = "a" + Date.now();
     const file = path.join(this.dir, id + ".mp3");
+
+    console.log("[TTS] Generating file:", file);
+    console.log("[TTS] Clean text:", clean.slice(0, 100));
+
     try {
       const tts = await this.getInstance(voice);
+      console.log("[TTS] Calling ttsPromise...");
+
       await tts.ttsPromise(clean, file);
-      return "http://localhost:4000/audio/" + id + ".mp3";
-    } catch (e) {
-      console.error("[TTS] speak error:", e);
+
+      if (fs.existsSync(file)) {
+        const stats = fs.statSync(file);
+        console.log("[TTS] ✅ File created, size:", stats.size, "bytes");
+
+        if (stats.size < 1000) {
+          console.warn("[TTS] ⚠️ File size very small, may be empty");
+          return null;
+        }
+
+        return "http://localhost:4000/audio/" + id + ".mp3";
+      } else {
+        console.error("[TTS] ❌ File not created by ttsPromise");
+        return null;
+      }
+    } catch (e: any) {
+      console.error("[TTS] ❌ speak error:", e.message);
+      console.error("[TTS] Stack:", e.stack);
       this.instances[voice] = null;
       return null;
     }
   }
 }
-
-
-
-

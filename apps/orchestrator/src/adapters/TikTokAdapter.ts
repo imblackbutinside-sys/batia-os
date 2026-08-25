@@ -1,4 +1,4 @@
-import { TikTokLiveConnection } from "tiktok-live-connector";
+﻿import { TikTokLiveConnection } from "tiktok-live-connector";
 
 interface TikTokCallbacks {
   onComment: (username: string, text: string) => void;
@@ -38,7 +38,8 @@ export class TikTokAdapter {
 
       this.conn.on("chat", (data) => {
         const uname = data.uniqueId || data.userId || "unknown";
-        const text = data.comment || "";
+        // FIXED: Support kedua-dua field (comment & content)
+        const text = data.comment || data.content || "";
         if (text) opts.onComment(uname, text);
       });
 
