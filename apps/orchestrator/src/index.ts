@@ -124,6 +124,10 @@ function normalizeMs(t: string): string {
 
 function cleanAiOutput(text: string): string {
   let clean = text;
+  
+  // ✅ AUTO-FIX: Buang semua hyphen/ejaan berjarak (contoh: "t-e-r-i-m-a" jadi "terima")
+  clean = clean.replace(/([a-zA-ZÀ-ÿ])\s*-\s*([a-zA-ZÀ-ÿ])/g, "$1$2");
+  
   clean = clean.replace(/Mah-lay-see-ah/gi, "Malaysia");
   clean = clean.replace(/Mah-lay-sia/gi, "Malaysia");
   clean = clean.replace(/Ma-lay-see-ah/gi, "Malaysia");
@@ -132,6 +136,7 @@ function cleanAiOutput(text: string): string {
   clean = clean.replace(/Tik-Tok/gi, "TikTok");
   clean = clean.replace(/Live-stream/gi, "live stream");
   clean = clean.replace(/\s+/g, " ").trim();
+  
   return clean;
 }
 
@@ -250,13 +255,9 @@ let lastGreet = 0;
 const lastCommentTime: Record<string, number> = {};
 
 function handleJoin(uname: string) {
-  if (!isValidUsername(uname)) {
-    return;
-  }
+  if (!isValidUsername(uname)) return;
   const now = Date.now();
-  if (now - lastGreet < 25000) {
-    return;
-  }
+  if (now - lastGreet < 25000) return;
   lastGreet = now;
   void (async () => {
     try {
@@ -319,6 +320,7 @@ setInterval(async () => {
   emitProduct();
   if (tick % 60 === 0) {
     try {
+      const musicDir = path.join(process.cwd(), "audio", "music");
       if (fs.existsSync(musicDir)) {
         const cutoff = Date.now() - 15 * 60 * 1000;
         for (const fn of fs.readdirSync(musicDir)) {
@@ -368,9 +370,7 @@ const musicDir = path.join(process.cwd(), "audio", "music");
 async function fetchMusic(q: string): Promise<string | null> {
   try {
     const cacheDir = path.join(musicDir, ".cache");
-    if (fs.existsSync(cacheDir)) {
-      fs.rmSync(cacheDir, { recursive: true, force: true });
-    }
+    if (fs.existsSync(cacheDir)) fs.rmSync(cacheDir, { recursive: true, force: true });
   } catch (e) {}
   try {
     if (fs.existsSync(musicDir)) {
@@ -422,8 +422,6 @@ let isDucking = false;
 let autoTapEnabled = false;
 let autoTapInterval: NodeJS.Timeout | null = null;
 let autoTapCount = 0;
-let autoTapThisMinute = 0;
-setInterval(() => { autoTapThisMinute = 0; }, 60000);
 
 function startAutoTap() {
   if (autoTapInterval) clearInterval(autoTapInterval);
@@ -444,8 +442,7 @@ function startAutoTap() {
     const next = 45000 + Math.floor(Math.random() * 45000);
     autoTapInterval = setTimeout(tick, next) as unknown as NodeJS.Timeout;
   };
-  const first = 5000;
-  autoTapInterval = setTimeout(tick, first) as unknown as NodeJS.Timeout;
+  autoTapInterval = setTimeout(tick, 5000) as unknown as NodeJS.Timeout;
 }
 
 function stopAutoTap() {
@@ -504,12 +501,7 @@ async function playNextInQueue() {
 
 async function enqueueSong(q: string, by: string) {
   const cleanQ = cleanSongTitle(q);
-  console.log(`[MUSIC] Input: "${q}" → Clean: "${cleanQ}"`);
-  
-  if (!cleanQ || cleanQ.length < 2) {
-    console.log(`[MUSIC] Skip - invalid title after clean`);
-    return;
-  }
+  if (!cleanQ || cleanQ.length < 2) return;
   if (songQueue.length >= 5) {
     console.log(`[MUSIC] Queue penuh (5), discard: ${cleanQ}`);
     return;
@@ -544,8 +536,7 @@ httpServer.on("request", (req, res) => {
       }
       return;
     }
-    res.writeHead(404);
-    res.end("not found");
+    res.writeHead(404); res.end("not found");
   }
   if (req.url && req.url.startsWith("/audio/")) {
     const file = path.join(process.cwd(), "audio", path.basename(req.url));
@@ -566,20 +557,15 @@ httpServer.on("request", (req, res) => {
       }
       return;
     }
-    res.writeHead(404);
-    res.end("not found");
+    res.writeHead(404); res.end("not found");
   }
 });
 
 async function ensureSession() {
   let host = await prisma.host.findFirst();
-  if (!host) {
-    host = await prisma.host.create({ data: { name: "Host BATIA", tiktokHandle: "@batia.demo" } });
-  }
+  if (!host) host = await prisma.host.create({ data: { name: "Host BATIA", tiktokHandle: "@batia.demo" } });
   let session = await prisma.liveSession.findFirst({ where: { status: "LIVE" } });
-  if (!session) {
-    session = await prisma.liveSession.create({ data: { hostId: host.id, mode: "REGULAR", status: "LIVE" } });
-  }
+  if (!session) session = await prisma.liveSession.create({ data: { hostId: host.id, mode: "REGULAR", status: "LIVE" } });
   return session;
 }
 
@@ -588,7 +574,7 @@ function isValidSongTitle(title: string): boolean {
   const lowerTitle = title.toLowerCase().trim();
   const uncertaintyWords = /\b(tak tau|x tau|tau apa|apa tah|random|kot|entah|mana|tak pasti|confuse|buntu)\b/i;
   if (uncertaintyWords.test(lowerTitle)) return false;
-  const commandWords = /\b(nak|boleh|tolong|sila|please|bagi|minta|request|mahu|hendak|nak minta)\b/i;
+  const commandWords = /\b(nak|boleh|tolong|sila|please|bagi|minta|request|req|mahu|hendak|nak minta)\b/i;
   if (commandWords.test(lowerTitle)) return false;
   const words = lowerTitle.split(/\s+/).filter(w => w.length > 0);
   if (words.length === 1 && /^(apa|mana|bila|siapa|kenapa|macam|bagaimana|ya|tak|ok)$/i.test(words[0])) return false;
@@ -597,68 +583,58 @@ function isValidSongTitle(title: string): boolean {
 
 function sanitizeForRegularMode(text: string): string {
   let clean = text;
-  const salesPatterns = [
-    /tekan beg kuning/gi, /beg kuning/gi, /beg hijau/gi, /keranjang kuning/gi,
-    /jualan/gi, /jual\b/gi, /produk/gi, /beli\b/gi, /membeli/gi, /order\b/gi,
-    /shopping/gi, /checkout/gi, /promo/gi, /diskaun/gi, /harga/gi, /stok/gi,
-    /beg\b/gi, /cart\b/gi, /troli/gi, /kod\s+\w+/gi, /baucar/gi, /voucher/gi,
-    /flash\s+sale/gi, /sale\b/gi,
-  ];
-  for (const pattern of salesPatterns) {
-    clean = clean.replace(pattern, "");
-  }
-  clean = clean.replace(/\s+/g, " ");
-  clean = clean.replace(/\s+([,.!?])/g, "$1");
-  clean = clean.replace(/^[\s,.!?]+/, "");
-  clean = clean.trim();
-  if (!clean || clean.length < 8) {
-    clean = "Ok member, jom kita borak santai malam ni!";
-  }
+  const salesPatterns = [/tekan beg kuning/gi, /beg kuning/gi, /beg hijau/gi, /keranjang kuning/gi, /jualan/gi, /jual\b/gi, /produk/gi, /beli\b/gi, /membeli/gi, /order\b/gi, /shopping/gi, /checkout/gi, /promo/gi, /diskaun/gi, /harga/gi, /stok/gi, /beg\b/gi, /cart\b/gi, /troli/gi, /kod\s+\w+/gi, /baucar/gi, /voucher/gi, /flash\s+sale/gi, /sale\b/gi];
+  for (const pattern of salesPatterns) clean = clean.replace(pattern, "");
+  clean = clean.replace(/\s+/g, " ").replace(/\s+([,.!?])/g, "$1").replace(/^[\s,.!?]+/, "").trim();
+  if (!clean || clean.length < 8) clean = "Ok member, jom kita borak santai malam ni!";
   return clean;
 }
 
+// ✅ FUNGSI PROCESS COMMENT DENGAN DEBUG LOG LENGKAP
 async function processComment(username: string, text: string) {
+  console.log(`[DEBUG processComment] DITERIMA: username="${username}", text="${text}"`);
+
   if (!username || username === "unknown" || username === "0" || username.length < 3) {
+    console.log(`[DEBUG] DITOLAK: username tidak sah atau terlalu pendek ("${username}")`);
     return;
   }
-  
+
   const now = Date.now();
   if (lastCommentTime[username] && now - lastCommentTime[username] < 500) {
+    console.log(`[DEBUG] DITOLAK: Spam komen dari "${username}"`);
     return;
   }
   lastCommentTime[username] = now;
   
   try {
-    if (isDuplicateComment(username, text)) return;
+    if (isDuplicateComment(username, text)) {
+      console.log(`[DEBUG] DITOLAK: Komen duplicate dari "${username}"`);
+      return;
+    }
+
     const session = await ensureSession();
     commentTimes.push(Date.now());
     liveStats.comments++;
     io.emit(WS_EVENTS.COMMENT_LOG, { username, text });
+    
     if (songPlaying && !isDucking) {
       isDucking = true;
       io.emit("music:duck", {});
-      setTimeout(() => { 
-        if (isDucking) { 
-          isDucking = false; 
-          io.emit("music:unduck", {}); 
-        } 
-      }, 8000);
+      setTimeout(() => { if (isDucking) { isDucking = false; io.emit("music:unduck", {}); } }, 8000);
     }
+    
     const lowerText = text.toLowerCase().trim();
     const skipPatterns = /^(skip|cancel|taknak|tak nak|next|stop lagu|batal|batal kan|next song|skip lagu)$/i;
     if (skipPatterns.test(lowerText) || lowerText.includes("skip") || lowerText.includes("cancel lagu") || lowerText.includes("taknak lagu")) {
       if (songPlaying || songQueue.length > 0) {
         const skipMsg = `Ok ${username}, lagu di-skip!`;
         const audioUrl = await speakMixed(skipMsg, "MS");
-        if (audioUrl) {
-          emitResponse({ type: "SKIP_CONFIRM", content: skipMsg, targetUser: username, audioUrl });
-        }
+        if (audioUrl) emitResponse({ type: "SKIP_CONFIRM", content: skipMsg, targetUser: username, audioUrl });
         skipCurrentSong();
         return;
       }
     }
     
-    // FIXED: Song request - await extraction, respond kalau tiada tajuk
     let handledByMusic = false;
     const nowS = Date.now();
     const explicitRequestPattern = /\b(mainkan|play|pasang|putar|nyanyi|request|req|minta lagu|nak dengar lagu|bagi lagu|on kan lagu|bukak lagu)\s+(lagu\s+)?[a-zA-Z0-9]/i;
@@ -668,45 +644,30 @@ async function processComment(username: string, text: string) {
       let q = "";
       try {
         const r = await routeAIRequest("CHITCHAT", [{ 
-          role: "system", 
-          content: "Ekstrak tajuk lagu daripada komen penonton. Jawab DENGAN tajuk lagu sahaja (serta artis jika disebut). Tiada ayat lain, tiada tanda petik. Jika TIADA tajuk lagu spesifik disebut, jawab tepat: NONE" 
+          role: "system", content: "Ekstrak tajuk lagu daripada komen penonton. Jawab DENGAN tajuk lagu sahaja (serta artis jika disebut). Tiada ayat lain, tiada tanda petik. Jika TIADA tajuk lagu spesifik disebut, jawab tepat: NONE" 
         }, { role: "user", content: text }]);
-        q = r.content
-          .replace(/^["'""''\s]+|["'""''\s]+$/g, "")
-          .replace(/^[-–—\s]+|[-–—\s]+$/g, "")
-          .replace(/\s*\([^)]*\)\s*/g, " ")
-          .replace(/\s*oleh\s+.+$/i, "")
-          .replace(/\s*by\s+.+$/i, "")
-          .replace(/\s*feat\.?\s+.+$/i, "")
-          .replace(/\s+/g, " ")
-          .trim();
+        q = r.content.replace(/^["'""''\s]+|["'""''\s]+$/g, "").replace(/^[-–—\s]+|[-–—\s]+$/g, "").replace(/\s*\([^)]*\)\s*/g, " ").replace(/\s*oleh\s+.+$/i, "").replace(/\s*by\s+.+$/i, "").replace(/\s*feat\.?\s+.+$/i, "").replace(/\s+/g, " ").trim();
         console.log("[MUSIC] AI extracted:", JSON.stringify(q));
-      } catch (e) {
-        console.error("[MUSIC] AI extraction error:", e);
-      }
+      } catch (e) { console.error("[MUSIC] AI extraction error:", e); }
       
       if (q && q !== "NONE" && q.length >= 2 && isValidSongTitle(q)) {
         handledByMusic = true;
         enqueueSong(q, username);
         const confirmMsg = `Ok ${username}, lagu ${q} masuk queue!`;
         const audioUrl = await speakMixed(confirmMsg, "MS");
-        if (audioUrl) {
-          emitResponse({ type: "SONG_CONFIRM", content: confirmMsg, targetUser: username, audioUrl });
-        }
+        if (audioUrl) emitResponse({ type: "SONG_CONFIRM", content: confirmMsg, targetUser: username, audioUrl });
       }
     }
     
     const simplePatterns = /^(haha+|hehe+|hihi+|lol|lmao|ok|okay|yes|no|ya|tak|yeap|yup|nice|good|best|mantap|power|ngam+)$/i;
-    if (simplePatterns.test(text.trim())) {
-      return;
-    }
-    if (handledByMusic) {
-      return;
-    }
+    if (simplePatterns.test(text.trim())) return;
+    if (handledByMusic) return;
+    
     const commentLang = detectLang(text);
     const { response, violations, approvalRequest } = await engine.handleComment(session.id, username, text);
     for (const v of violations) io.emit(WS_EVENTS.POLICY_VIOLATION, v);
     if (approvalRequest) io.emit(WS_EVENTS.APPROVAL_REQUEST, approvalRequest);
+    
     if (response) {
       let cleanResponse = response;
       if (commentLang === "EN") {
@@ -721,22 +682,17 @@ async function processComment(username: string, text: string) {
           } catch (e) {}
         }
       }
-      if (currentMode === "REGULAR") {
-        cleanResponse = sanitizeForRegularMode(cleanResponse);
-      }
+      if (currentMode === "REGULAR") cleanResponse = sanitizeForRegularMode(cleanResponse);
       if (isDuplicateResponse(cleanResponse)) return;
+      
       if (currentMode === "SHOPPABLE" && scriptQueue.running) {
         scriptQueue.addResponse(cleanResponse, username + ": " + text);
       } else {
         const audioUrl = await speakMixed(cleanResponse, commentLang);
-        if (audioUrl) {
-          emitResponse({ type: "COMMENT_RESPONSE", content: cleanResponse, targetUser: username, audioUrl });
-        }
+        if (audioUrl) emitResponse({ type: "COMMENT_RESPONSE", content: cleanResponse, targetUser: username, audioUrl });
       }
     }
-  } catch (e) {
-    console.error("[WS] comment error:", e);
-  }
+  } catch (e) { console.error("[WS] comment error:", e); }
 }
 
 async function processGift(username: string, giftName: string, giftValue: number) {
@@ -744,17 +700,11 @@ async function processGift(username: string, giftName: string, giftValue: number
     const session = await ensureSession();
     liveStats.gifts++;
     let reaction = await engine.handleGift(session.id, username, giftName, giftValue);
-    if (currentMode === "REGULAR") {
-      reaction = sanitizeForRegularMode(reaction);
-    }
+    if (currentMode === "REGULAR") reaction = sanitizeForRegularMode(reaction);
     if (isDuplicateResponse(reaction)) return;
     const audioUrl = await speakMixed(reaction);
-    if (audioUrl) {
-      emitResponse({ type: "GIFT_REACTION", content: reaction, targetUser: username, audioUrl });
-    }
-  } catch (e) {
-    console.error("[WS] gift error:", e);
-  }
+    if (audioUrl) emitResponse({ type: "GIFT_REACTION", content: reaction, targetUser: username, audioUrl });
+  } catch (e) { console.error("[WS] gift error:", e); }
 }
 
 io.on("connection", (socket) => {
@@ -762,16 +712,14 @@ io.on("connection", (socket) => {
   if (!audioSink) audioSink = { id: socket.id, label: "LAPTOP" };
   socket.emit("script:update", scriptQueue.snapshot());
   emitProduct();
+  
   socket.on(WS_EVENTS.AUDIO_CLAIM, (data: { label: string }) => {
     audioSink = { id: socket.id, label: data.label };
     io.emit(WS_EVENTS.AUDIO_ROUTE, { id: socket.id, label: data.label });
   });
-  socket.on(WS_EVENTS.COMMENT_RECEIVED, (data: { username: string; text: string }) => {
-    processComment(data.username, data.text);
-  });
-  socket.on(WS_EVENTS.GIFT_RECEIVED, (data: { username: string; giftName: string; giftValue: number }) => {
-    processGift(data.username, data.giftName, data.giftValue);
-  });
+  socket.on(WS_EVENTS.COMMENT_RECEIVED, (data: { username: string; text: string }) => processComment(data.username, data.text));
+  socket.on(WS_EVENTS.GIFT_RECEIVED, (data: { username: string; giftName: string; giftValue: number }) => processGift(data.username, data.giftName, data.giftValue));
+  
   socket.on(WS_EVENTS.TIKTOK_CONNECT, (data: { username: string }) => {
     io.emit(WS_EVENTS.TIKTOK_STATUS, { status: "CONNECTING..." });
     tiktok.connect(data.username, {
@@ -783,10 +731,12 @@ io.on("connection", (socket) => {
       onJoin: (u) => handleJoin(u),
     });
   });
+  
   socket.on(WS_EVENTS.TIKTOK_DISCONNECT, () => {
     tiktok.disconnect();
     io.emit(WS_EVENTS.TIKTOK_STATUS, { status: "DISCONNECTED" });
   });
+  
   socket.on("shop:start", async () => {
     try {
       const products = await prisma.product.findMany({ include: { skus: true }, where: { isActive: true }, orderBy: { sortOrder: "asc" } });
@@ -801,61 +751,41 @@ io.on("connection", (socket) => {
   socket.on("shop:pause", () => scriptQueue.pause());
   socket.on("shop:resume", () => scriptQueue.resume());
   socket.on("shop:settings", (d: any) => scriptQueue.setSettings(d || {}));
-  socket.on("shop:interject", (d: any) => {
-    const t = String((d && d.text) || "").trim();
-    if (t) { scriptQueue.addPitch(t); }
-  });
+  socket.on("shop:interject", (d: any) => { if (d && d.text) scriptQueue.addPitch(String(d.text).trim()); });
   socket.on("test:join", () => handleJoin("abam_test_join"));
-  socket.on("music:play", (d: any) => { 
-    const q = String((d && d.q) || "").trim(); 
-    if (q) void enqueueSong(q, "host"); 
+  
+  socket.on("music:play", (d: any) => { const q = String((d && d.q) || "").trim(); if (q) void enqueueSong(q, "host"); });
+  socket.on("music:skip", () => skipCurrentSong());
+  
+  // ✅ PEMBETULAN: music:stop sekarang bertindak seperti skip (tidak padam queue)
+  socket.on("music:stop", () => {
+    try { 
+      if (currentMusicFile && fs.existsSync(currentMusicFile)) fs.unlinkSync(currentMusicFile); 
+    } catch (e) {}
+    currentMusicFile = null;
+    songPlaying = false;
+    emitSongQueue();
+    io.emit("music:status", { state: "SKIPPED" });
+    setTimeout(() => void playNextInQueue(), 500); // Sambung main lagu que seterusnya
   });
-  socket.on("music:skip", () => {
-    skipCurrentSong();
-  });
-  socket.on("autoTap:toggle", (d: any) => {
-    autoTapEnabled = !!(d && d.enabled);
-    if (autoTapEnabled) { autoTapCount = 0; startAutoTap(); }
-    else { stopAutoTap(); }
-    io.emit("autoTap:status", { enabled: autoTapEnabled, count: autoTapCount });
-  });
+
   socket.on("music:pause", () => io.emit("music:status", { state: "PAUSED" }));
   socket.on("music:resume", () => io.emit("music:status", { state: "PLAYING" }));
   socket.on("music:volume", (d: any) => { musicVolume = Math.max(0, Math.min(1, Number(d && d.vol) || 1)); io.emit("music:status", { state: "VOLUME", vol: musicVolume }); });
-  socket.on("music:unduck", () => {
-    if (isDucking) {
-      isDucking = false;
-      io.emit("music:unduck", {});
-    }
-  });
-  socket.on("music:stop", () => {
-    try { 
-      if (currentMusicFile && fs.existsSync(currentMusicFile)) { 
-        fs.unlinkSync(currentMusicFile); 
-      } 
-    } catch (e) {}
-    currentMusicFile = null;
-    songQueue = [];
-    songPlaying = false;
-    emitSongQueue();
-    io.emit("music:status", { state: "STOPPED" });
-  });
+  socket.on("music:unduck", () => { if (isDucking) { isDucking = false; io.emit("music:unduck", {}); } });
+  
   socket.on("music:ended", (d: any) => {
     try {
       if (!songPlaying) return;
       if (d && d.file) { 
         const p = path.join(musicDir, path.basename(String(d.file))); 
-        if (fs.existsSync(p)) { 
-          fs.unlinkSync(p); 
-          io.emit("music:status", { state: "CACHE_CLEARED", q: lastMusicQ }); 
-        } 
+        if (fs.existsSync(p)) { fs.unlinkSync(p); io.emit("music:status", { state: "CACHE_CLEARED", q: lastMusicQ }); } 
       }
       songPlaying = false;
       setTimeout(() => void playNextInQueue(), 500);
-    } catch (e) {
-      console.error("[MUSIC] music:ended error:", e);
-    }
+    } catch (e) { console.error("[MUSIC] music:ended error:", e); }
   });
+  
   socket.on("shop:config", async (d: { description: string; sellingPoints: string[]; promoValue?: string; promoCode?: string }) => {
     try {
       const p = await prisma.product.findFirst({ where: { isActive: true }, orderBy: { sortOrder: "asc" } });
@@ -866,6 +796,7 @@ io.on("connection", (socket) => {
       }
     } catch (e) { console.error("[SHOP] config error:", e); }
   });
+  
   socket.on(WS_EVENTS.APPROVAL_DECISION, async (data: { id: string; decision: "approved" | "rejected"; finalText?: string; username?: string }) => {
     let log: any = null;
     try { log = await prisma.violationLog.findUnique({ where: { id: data.id } }); } catch (e) {}
@@ -874,20 +805,18 @@ io.on("connection", (socket) => {
         const text = data.finalText || (log ? log.resolvedText : null) || (log ? log.triggeredText : null) || "ok, terima!";
         if (log) await prisma.violationLog.update({ where: { id: data.id }, data: { humanResolved: true, resolvedText: text } }).catch(() => {});
         const audioUrl = await speakMixed(text);
-        if (audioUrl) {
-          emitResponse({ type: "APPROVED_RESPONSE", content: text, targetUser: data.username || "viewer", audioUrl });
-        }
+        if (audioUrl) emitResponse({ type: "APPROVED_RESPONSE", content: text, targetUser: data.username || "viewer", audioUrl });
       } else {
         if (log) await prisma.violationLog.update({ where: { id: data.id }, data: { humanResolved: true, action: "REJECTED_BY_HUMAN" } }).catch(() => {});
       }
-    } catch (e) {
-      console.error("[WS] approval error:", e);
-    }
+    } catch (e) { console.error("[WS] approval error:", e); }
   });
+  
   socket.on(WS_EVENTS.MODE_CHANGED, (data: { mode: "REGULAR" | "SHOPPABLE" }) => {
     engine.setMode(data.mode);
     currentMode = data.mode;
   });
+  
   socket.on(WS_EVENTS.VOICE_CHANGED, async (data: { voice: string }) => {
     await tts.setVoice(data.voice);
     currentTtsVoice = data.voice;
