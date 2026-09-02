@@ -1,48 +1,446 @@
-﻿# BATIA OS - AI TikTok Live Host (Malaysia Edition)
+﻿\# 🎙️ BATIA OS — AI Co-Host TikTok Live
 
-AI host untuk TikTok Live: baca komen, balas bersuara (TTS), policy firewall
-anti-violate TikTok, bilingual MS/EN dengan 4 suara.
 
-## Feature
-- AI bilingual MS/EN (auto-detect bahasa komen)
-- 4 suara: Yasmin/Osman (Melayu), Jenny/Guy (English auto)
-- Policy firewall + rewrite compliant (TikTok Malaysia 2026)
-- Stats live + panel VIP + speaker auto-remember
-- Auto-pitch produk (Shoppable) + butang test rawak
-- Connect TikTok Live (tiktok-live-connector)
 
-## Tech Stack
-Node.js + TypeScript (tsx) | Socket.IO | Next.js | Prisma + PostgreSQL (Docker)
-| node-edge-tts | Groq API (qwen/qwen3.6-27b) | tiktok-live-connector
+BATIA OS ialah sistem \*\*AI co-host automatik untuk TikTok Live\*\* dalam Bahasa Melayu pasar + English. Ia membaca komen penonton dengan suara AI, melayan request lagu, auto-tap untuk likes, dan melindungi akaun dengan Policy Firewall.
 
-## Setup
-1. Prerequisites: Node 24, pnpm, Docker Desktop
-2. docker compose up -d        (PostgreSQL + Redis)
-3. pnpm install
-4. pnpm db:push
-5. Isi GROQ_API_KEY dalam apps/orchestrator/.env
-6. Terminal 1: pnpm dev:orch   (port 4000)
-7. Terminal 2: pnpm dev:web    (port 3000)
-8. Browser: http://localhost:3000
 
-## Struktur
-apps/orchestrator  backend (AI, TTS, socket, policy, adapter TikTok)
-apps/web           dashboard Next.js
-packages/database  Prisma schema
-packages/shared    WS_EVENTS dikongsi
-policies/          tiktok_my_2026.yaml (policy firewall)
 
-## Save Points (git)
-568bc9e  TERKINI - Qwen3.6 Groq (no thinking) + bilingual fix + username TikTok real
-8a5b2dc  stabil selepas repair + ignore audio cache
-4f25664  sebelum SUARA KU + default Osman
-548adf3  lama (origin/main) - bilingual + Jenny voice + pronunciation fix
+\## ✨ Fitur
 
-Rollback: git checkout 568bc9e -- apps/orchestrator/src apps/web/src
 
-## Nota Penting
-- llama-3.3-70b-versatile DIBUANG Groq 16/8/2026 -> guna qwen/qwen3.6-27b
-- Qwen3.6 wajib reasoning_effort:"none" + reasoning_format:"hidden"
-  (jika tidak, tag akan dibaca oleh TTS)
-- Language detection rule-based (regex MS) dalam AIRouter.ts
-- Username TikTok diambil dari data.user.uniqueId
+
+| Fitur | Keterangan |
+
+|---|---|
+
+| 🗣️ AI Host Bilingual | Balas komen dalam BM pasar / English automatik |
+
+| 🔊 4 Suara Edge-TTS | Yasmin (F), Osman (M), Jenny (EN-F), Guy (EN-M) |
+
+| 👋 Auto Greet | Sapa penonton baru dengan nama mereka |
+
+| 🎵 Request Lagu | Viewer request lagu → download YouTube (yt-dlp) → main + cache |
+
+| 🔇 Auto Ducking | Muzik kecil automatik bila AI bercakap |
+
+| 👆 Auto Tapper | AI ajak viewer tap screen setiap 45–90s (likes REAL) |
+
+| 🛡️ Policy Firewall | Komen berisiko ditahan ke Approval Zone untuk kelulusan manual |
+
+| 🛍️ Shoppable Mode | Auto pitch produk + jawab soalan harga/stok/promo |
+
+| 👑 VIP Memory | Ingat penonton VIP |
+
+| 📊 Live Stats | Viewers, likes, komen, gifts realtime |
+
+
+
+\---
+
+
+
+\## 🧰 Keperluan Sistem
+
+
+
+\- \*\*Windows 10/11\*\*
+
+\- \*\*Node.js 24\*\* — https://nodejs.org
+
+\- \*\*pnpm\*\* — `corepack enable` atau `npm i -g pnpm`
+
+\- \*\*Docker Desktop\*\* (untuk Postgres + Redis) — https://docker.com
+
+\- \*\*Git\*\* — https://git-scm.com
+
+\- \*\*yt-dlp.exe\*\* (untuk download lagu)
+
+\- \*\*Akaun Groq\*\* (API key percuma) — https://console.groq.com
+
+\- \*\*Internet\*\* (TTS Edge + TikTok + YouTube)
+
+
+
+\---
+
+
+
+\## 📦 Cara Install (Langkah demi Langkah)
+
+
+
+\### 1️⃣ Clone repository
+
+
+
+```powershell
+
+git clone https://github.com/USERNAME/batia-os.git
+
+cd batia-os
+
+```
+
+
+
+\### 2️⃣ Aktifkan pnpm
+
+
+
+```powershell
+
+corepack enable
+
+pnpm -v
+
+```
+
+
+
+\### 3️⃣ Install semua dependencies
+
+
+
+```powershell
+
+pnpm install
+
+```
+
+
+
+\### 4️⃣ Hidupkan Docker (Postgres + Redis)
+
+
+
+Pastikan \*\*Docker Desktop\*\* sedang running, kemudian:
+
+
+
+```powershell
+
+docker compose up -d
+
+```
+
+
+
+Semak status:
+
+
+
+```powershell
+
+docker ps
+
+```
+
+
+
+Mesti nampak container \*\*postgres\*\* dan \*\*redis\*\* status `Up`.
+
+
+
+\### 5️⃣ Setup file `.env`
+
+
+
+Buat file `apps/orchestrator/.env`:
+
+
+
+```env
+
+ORCHESTRATOR\_PORT=4000
+
+DATABASE\_URL=postgresql://postgres:postgres@localhost:5432/batia
+
+GROQ\_API\_KEY=gsk\_gantikan\_dengan\_key\_anda
+
+REDIS\_URL=redis://localhost:6379
+
+```
+
+
+
+> ⚠️ Username/password Postgres mesti \*\*sama\*\* dengan nilai dalam `docker-compose.yml`.
+
+> 🔑 Groq API key: daftar percuma di https://console.groq.com → API Keys → Create.
+
+
+
+\### 6️⃣ Setup Database (Prisma)
+
+
+
+```powershell
+
+cd packages/database
+
+npx prisma db push
+
+npx prisma generate
+
+cd ..\\..
+
+```
+
+
+
+\### 7️⃣ Letak yt-dlp (untuk muzik)
+
+
+
+1\. Download `yt-dlp.exe` dari https://github.com/yt-dlp/yt-dlp/releases
+
+2\. Letak dalam folder:
+
+
+
+```
+
+batia-os/tools/yt-dlp.exe
+
+```
+
+
+
+\### 8️⃣ Run sistem (2 terminal berasingan)
+
+
+
+\*\*Terminal 1 — Backend (Orchestrator, port 4000):\*\*
+
+
+
+```powershell
+
+cd D:\\batia-os
+
+pnpm dev:orch
+
+```
+
+
+
+Mesti keluar:
+
+```
+
+BATIA Orchestrator on http://localhost:4000
+
+\[TTS] ready: ms-MY-YasminNeural
+
+```
+
+
+
+\*\*Terminal 2 — Frontend (Dashboard, port 3000):\*\*
+
+
+
+```powershell
+
+cd D:\\batia-os
+
+pnpm dev:web
+
+```
+
+
+
+\### 9️⃣ Buka dashboard
+
+
+
+Buka browser: \*\*http://localhost:3000\*\*
+
+
+
+\---
+
+
+
+\## 🖥️ Cara Guna Dashboard
+
+
+
+1\. \*\*Klik butang `SPEAKER` (ungu)\*\* — tab ini jadi peranti suara AI. (Buka \*\*1 tab sahaja\*\*.)
+
+2\. Tukar suara: \*\*YASMIN / OSMAN\*\*
+
+3\. Test tanpa live: tekan \*\*Test 1 – Test 4\*\*, \*\*SHOP 1–3\*\*, \*\*Test JOIN\*\*, \*\*Test MUZIK\*\*
+
+4\. Muzik: taip tajuk lagu → \*\*Mainkan\*\* / \*\*Pause\*\* / \*\*Stop\*\*
+
+5\. \*\*Auto Tapper\*\*: klik \*\*Start Auto Tap\*\*
+
+6\. \*\*Shoppable Live\*\*: klik \*\*SHOPPABLE LIVE\*\* → isi produk → \*\*Go Live\*\*
+
+
+
+\### 🔴 Nak connect TikTok Live
+
+
+
+1\. \*\*GO LIVE dulu di phone\*\* (public) — wajib!
+
+2\. Masukkan username TikTok (tanpa `@`)
+
+3\. Klik \*\*CONNECT LIVE\*\* → badge jadi `CONNECTED`
+
+4\. Komen viewer akan dibaca AI secara automatik
+
+5\. \*\*JANGAN refresh / restart terminal masa live\*\*
+
+
+
+\---
+
+
+
+\## 🧪 Test Komen Tanpa Live (script)
+
+
+
+```powershell
+
+cd apps/orchestrator
+
+npx tsx test-viewer.ts kak\_ros "Wah bestnya live malam ni member"
+
+npx tsx test-viewer.ts --join
+
+```
+
+
+
+\---
+
+
+
+\## 📁 Struktur Project
+
+
+
+```
+
+batia-os/
+
+├── apps/
+
+│   ├── orchestrator/      # Backend: Socket.IO, TTS, AI, muzik, TikTok
+
+│   │   └── src/
+
+│   │       ├── index.ts
+
+│   │       ├── adapters/TikTokAdapter.ts
+
+│   │       ├── core/ (LiveContextEngine, ScriptQueue)
+
+│   │       ├── policy/PolicyEngine.ts
+
+│   │       ├── router/AIRouter.ts
+
+│   │       └── voice/TtsEngine.ts
+
+│   └── web/               # Frontend Next.js (dashboard)
+
+├── packages/
+
+│   ├── shared/            # WS\_EVENTS \& types
+
+│   └── database/          # Prisma schema (Postgres)
+
+├── policies/
+
+│   └── tiktok\_my\_2026.yaml  # Rule Policy Firewall
+
+├── tools/
+
+│   └── yt-dlp.exe         # Letak manual
+
+├── docker-compose.yml     # Postgres + Redis
+
+└── README.md
+
+```
+
+
+
+\---
+
+
+
+\## 🛠️ Troubleshooting
+
+
+
+| Masalah | Punca | Fix |
+
+|---|---|---|
+
+| `User isn't online` | Akaun TikTok tak tengah live | GO LIVE di phone dulu, baru CONNECT LIVE |
+
+| `EADDRINUSE :4000` | Process lama masih hidup | `taskkill /IM node.exe /F` → run semula |
+
+| Suara AI tak keluar | Tab bukan SPEAKER / autoplay block | Klik mana-mana kat page, klik \*\*SPEAKER\*\*, tinggal 1 tab |
+
+| Lagu lambat mula | Download YouTube pertama kali (normal) | Main semula = instant (cache) |
+
+| Postgres tak connect | Docker tak running | `docker compose up -d` |
+
+| Sistem "lari" lepas edit | Code rosak | Rollback ke save point (bawah) |
+
+
+
+\---
+
+
+
+\## 💾 Save Point \& Rollback
+
+
+
+Sentiasa commit bila sistem stabil:
+
+
+
+```powershell
+
+git add -A
+
+git commit -m "SAVE POINT: sistem stabil"
+
+git push origin main
+
+```
+
+
+
+Rollback bila rosak:
+
+
+
+```powershell
+
+git log --oneline
+
+git checkout <COMMIT\_ID> -- apps/orchestrator/src apps/web/src
+
+```
+
+
+
+\---
+
+
+
+\## 📄 Lesen
+
+
+
+Projek peribadi. Penggunaan tertakluk kepada ToS TikTok \& Microsoft Edge-TTS.
+
