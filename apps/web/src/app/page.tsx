@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useEffect, useRef, useState } from "react";
 import { io } from "socket.io-client";
@@ -28,28 +28,34 @@ export default function Dashboard() {
   const [voiceStyle, setVoiceStyle] = useState("Casual");
   const [interjectText, setInterjectText] = useState("");
   const [musicQ, setMusicQ] = useState("");
+  const [lastQ, setLastQ] = useState("");
   const [musicPaused, setMusicPaused] = useState(false);
   const [musicVolume, setMusicVolume] = useState(1);
   const musicVolumeRef = useRef(1);
   const [isDucking, setIsDucking] = useState(false);
   const [autoTapEnabled, setAutoTapEnabled] = useState(false);
   const [autoTapCount, setAutoTapCount] = useState(0);
-  const [autoTapPerMin, setAutoTapPerMin] = useState(0);
   const [songList, setSongList] = useState<any[]>([]);
   const [music, setMusic] = useState<any>({ state: "IDLE" });
   const musicAudio = useRef<any>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
 
+  // ✅ AUTO-CLAIM SPEAKER bila page buka (suara pasti keluar kat tab ni)
   useEffect(() => {
     socket.on(WS_EVENTS.AUDIO_ROUTE, (d: any) => setSpeaker(d.label));
+    const label = /Mobi|Android/i.test(navigator.userAgent) ? "PHONE" : "LAPTOP";
+    socket.emit(WS_EVENTS.AUDIO_CLAIM, { label });
   }, []);
+
   useEffect(() => {
     socket.on(WS_EVENTS.LIVE_STATS, (d: any) => setStats(d));
     socket.on(WS_EVENTS.LIVE_VIPS, (d: any) => setVips(d));
   }, []);
+
   useEffect(() => {
     socket.on(WS_EVENTS.HOST_CUE, (d: any) => setResponses((prev: any) => [{ type: "HOST_CUE", content: d.text, targetUser: "HOST" }, ...prev]));
   }, []);
+
   useEffect(() => {
     socket.on("script:update", (d: any) => setShop(d));
     socket.on("shop:product", (d: any) => {
@@ -61,6 +67,7 @@ export default function Dashboard() {
       setProdConfigured(true);
     });
   }, []);
+
   useEffect(() => {
     if (videoRef.current) videoRef.current.playbackRate = shop.playbackSpeed || 1;
   }, [shop.playbackSpeed]);
@@ -69,12 +76,11 @@ export default function Dashboard() {
     const label = /Mobi|Android/i.test(navigator.userAgent) ? "PHONE" : "LAPTOP";
     socket.emit(WS_EVENTS.AUDIO_CLAIM, { label });
   };
+
   const [ttUser, setTtUser] = useState(() => (typeof window !== "undefined" ? localStorage.getItem("batia_tt_user") || "" : ""));
   useEffect(() => { if (ttUser) localStorage.setItem("batia_tt_user", ttUser); }, [ttUser]);
   const [ttStatus, setTtStatus] = useState("DISCONNECTED");
-  useEffect(() => {
-    socket.on(WS_EVENTS.TIKTOK_STATUS, (d: any) => setTtStatus(d.status));
-  }, []);
+  useEffect(() => { socket.on(WS_EVENTS.TIKTOK_STATUS, (d: any) => setTtStatus(d.status)); }, []);
   const connectTikTok = () => socket.emit(WS_EVENTS.TIKTOK_CONNECT, { username: ttUser.replace("@", "").trim() });
   const disconnectTikTok = () => socket.emit(WS_EVENTS.TIKTOK_DISCONNECT, {});
 
@@ -83,19 +89,23 @@ export default function Dashboard() {
   const qEn = ["hi host where are you from?", "hello, nice stream!", "how long have you been live?", "greetings from overseas", "first time here, what's this about?", "hello, can you hear me?", "hi, are you selling something?"];
   const qHarga = ["Berapa harga produk ni?", "Boleh kurang tak harga?", "Ada promo tak hari ni?", "Stok ada lagi ke?", "Postage berapa ke sana?", "COD boleh ke bang?", "Beli dua boleh kurang?"];
   const qBad = ["Komen NAK kalau korang nak RM100!", "Bagi gift mahal sikit bang!", "Share la live ni sampai viral", "Follow kalau nak menang hadiah", "Klik beg kuning sekarang atau rugi", "Gift roket sikit boss!"];
+
   const soundRef = useRef(true);
   const audioQueue = useRef<string[]>([]);
   const playing = useRef(false);
 
+  // ✅ PLAY AI AUDIO: paksa URL ke port 4000 + log error
   const playNext = () => {
     if (playing.current) return;
-    const url = audioQueue.current.shift();
-    if (!url) return;
+    const raw = audioQueue.current.shift();
+    if (!raw) return;
     playing.current = true;
-    const a = new Audio(url.replace("localhost", window.location.hostname));
+    const url = raw.startsWith("http") ? raw.replace("localhost", window.location.hostname) : "http://" + window.location.hostname + ":4000" + raw;
+    console.log("[AI-AUDIO] play:", url);
+    const a = new Audio(url);
     a.onended = () => { playing.current = false; playNext(); };
-    a.onerror = () => { playing.current = false; playNext(); };
-    a.play().catch(() => { playing.current = false; playNext(); });
+    a.onerror = () => { console.log("[AI-AUDIO] ❌ load error:", url); playing.current = false; playNext(); };
+    a.play().catch((e) => { console.log("[AI-AUDIO] ❌ blocked:", e && e.message); playing.current = false; playNext(); });
   };
 
   useEffect(() => {
@@ -104,20 +114,24 @@ export default function Dashboard() {
       console.log("[MUSIC-WEB] state:", d.state, "| audioFor:", d.audioFor, "| me:", socket.id, "| url:", d.url);
       if (d.state === "PLAYING" && d.url && d.audioFor !== socket.id) { console.log("[MUSIC-WEB] skip - not my sink"); return; }
       if (d.state === "PLAYING" && d.url) {
-        if (musicAudio.current) musicAudio.current.pause();
         const mpath = d.url.indexOf("/music/") >= 0 ? d.url.slice(d.url.indexOf("/music/")) : d.url;
-        const a = new Audio("http://" + window.location.hostname + ":4000" + mpath);
-        a.volume = musicVolume;
+        const fullUrl = "http://" + window.location.hostname + ":4000" + mpath;
+        if (musicAudio.current) musicAudio.current.pause();
+        const a = new Audio(fullUrl);
+        a.volume = musicVolumeRef.current;
         musicAudio.current = a;
+        setLastQ(d.q || "");
         a.onended = () => { socket.emit("music:ended", { file: d.url }); setMusic({ state: "IDLE" }); };
-        a.onplay = () => { if (isDucking) a.volume = musicVolumeRef.current * 0.2; else a.volume = musicVolumeRef.current; };
-      a.onerror = () => { console.log("[MUSIC-WEB] play error", d.url); socket.emit("music:ended", { file: d.url }); setMusic({ state: "IDLE" }); };
+        a.onplay = () => { a.volume = isDucking ? musicVolumeRef.current * 0.2 : musicVolumeRef.current; };
+        a.onerror = () => { console.log("[MUSIC-WEB] play error", d.url); socket.emit("music:ended", { file: d.url }); setMusic({ state: "IDLE" }); };
         a.play().catch(() => {});
       }
-      if (d.state === "STOPPED") { if (musicAudio.current) { musicAudio.current.pause(); musicAudio.current.currentTime = 0; musicAudio.current = null; } setMusicPaused(false); }
+      if (d.state === "STOPPED" || d.state === "SKIPPED" || d.state === "FAILED") {
+        if (musicAudio.current) { musicAudio.current.pause(); musicAudio.current.currentTime = 0; musicAudio.current = null; }
+        setMusicPaused(false);
+      }
       if (d.state === "PAUSED") { if (musicAudio.current) musicAudio.current.pause(); setMusicPaused(true); }
-      if (d.state === "PLAYING") { if (musicAudio.current) musicAudio.current.play().catch(() => {}); setMusicPaused(false); }
-      if (d.state === "CACHE_CLEARED") { setMusic({ state: "CACHE_CLEARED", q: d.q }); }
+      if (d.state === "RESUMED") { if (musicAudio.current) musicAudio.current.play().catch(() => {}); setMusicPaused(false); }
       if (d.state === "VOLUME") { setMusicVolume(d.vol); musicVolumeRef.current = d.vol; }
     });
     socket.on("music:duck", () => {
@@ -125,9 +139,7 @@ export default function Dashboard() {
       setIsDucking(true);
       const startVol = musicAudio.current.volume;
       const targetVol = startVol * 0.2;
-      const steps = 10;
-      const stepTime = 50;
-      let step = 0;
+      const steps = 10; const stepTime = 50; let step = 0;
       const fade = setInterval(() => {
         step++;
         const vol = startVol - (startVol - targetVol) * (step / steps);
@@ -140,9 +152,7 @@ export default function Dashboard() {
       setIsDucking(false);
       const startVol = musicAudio.current.volume;
       const targetVol = musicVolumeRef.current;
-      const steps = 10;
-      const stepTime = 50;
-      let step = 0;
+      const steps = 10; const stepTime = 50; let step = 0;
       const fade = setInterval(() => {
         step++;
         const vol = startVol + (targetVol - startVol) * (step / steps);
@@ -152,12 +162,13 @@ export default function Dashboard() {
     });
     socket.on("music:queue", (l: any) => setSongList(Array.isArray(l) ? l : []));
     socket.on("autoTap:status", (d: any) => { setAutoTapEnabled(!!d.enabled); setAutoTapCount(d.count || 0); });
-    socket.on("autoTap:tick", (d: any) => { setAutoTapCount(d.count || 0); setAutoTapPerMin(d.perMin || 0); });
+    socket.on("autoTap:tick", (d: any) => { setAutoTapCount(d.count || 0); });
     socket.on(WS_EVENTS.COMMENT_LOG, (d: any) => setComments((p) => [d, ...p].slice(0, 20)));
     socket.on(WS_EVENTS.POLICY_VIOLATION, (d: any) => setViolations((p) => [d, ...p].slice(0, 20)));
     socket.on(WS_EVENTS.APPROVAL_REQUEST, (d: any) => setApprovals((p) => [d, ...p].slice(0, 10)));
     socket.on(WS_EVENTS.AI_RESPONSE_READY, (d: any) => {
       setResponses((p) => [d, ...p].slice(0, 20));
+      console.log("[AI-READY] audioFor:", d.audioFor, "| me:", socket.id, "| MATCH:", d.audioFor === socket.id, "| url:", d.audioUrl);
       if (d.audioUrl && soundRef.current && d.audioFor === socket.id) {
         audioQueue.current.push(d.audioUrl);
         while (audioQueue.current.length > 3) audioQueue.current.shift();
@@ -183,8 +194,7 @@ export default function Dashboard() {
     socket.emit("shop:config", {
       description: prodDesc,
       sellingPoints: prodPoints.split("\n").map((s) => s.trim()).filter(Boolean),
-      promoValue,
-      promoCode,
+      promoValue, promoCode,
     });
     setProdConfigured(true);
   };
@@ -195,6 +205,15 @@ export default function Dashboard() {
     if (!t) return;
     socket.emit("shop:interject", { text: t });
     setInterjectText("");
+  };
+
+  const handlePlayMusic = () => {
+    const q = musicQ.trim() || lastQ;
+    if (!q) return;
+    console.log("[MUSIC-WEB] PLAY clicked:", q);
+    socket.emit("music:play", { q });
+    setMusicQ("");
+    setMusicPaused(false);
   };
 
   return (
@@ -222,7 +241,7 @@ export default function Dashboard() {
       {mode === "SHOPPABLE" && (
         <div className="mb-6 grid grid-cols-2 gap-6">
           <div className="bg-gray-900 rounded p-4">
-            <h2 className="font-semibold mb-3">{"\uD83D\uDC68\u200D\uD83D\uDCBC"} Product Details</h2>
+            <h2 className="font-semibold mb-3">👨‍💼 Product Details</h2>
             <label className="text-xs text-gray-400">Product Description</label>
             <textarea value={prodDesc} onChange={(e) => { setProdDesc(e.target.value); setProdConfigured(false); }} className="w-full bg-gray-800 rounded px-3 py-2 text-sm h-20 mb-3" />
             <label className="text-xs text-gray-400">Selling Points & Promotions (satu per baris)</label>
@@ -232,15 +251,13 @@ export default function Dashboard() {
               <input value={promoCode} onChange={(e) => { setPromoCode(e.target.value); setProdConfigured(false); }} placeholder="Kod: BATIA59" className="bg-gray-800 rounded px-3 py-2 text-sm w-32" />
             </div>
             <button onClick={saveConfig} className="bg-blue-600 px-4 py-2 rounded text-sm w-full">Save Product</button>
-            {prodConfigured && <div className="mt-2 text-green-400 text-xs border border-green-700 rounded px-3 py-2">{"\u2022"} Product configured</div>}
+            {prodConfigured && <div className="mt-2 text-green-400 text-xs border border-green-700 rounded px-3 py-2">• Product configured</div>}
           </div>
           <div className="bg-gray-900 rounded p-4">
-            <h2 className="font-semibold mb-3">{"\uD83C\uDFA4"} Voice Settings</h2>
+            <h2 className="font-semibold mb-3">🎤 Voice Settings</h2>
             <label className="text-xs text-gray-400">Voice Style</label>
             <select value={voiceStyle} onChange={(e) => setVoiceStyle(e.target.value)} className="w-full bg-gray-800 rounded px-3 py-2 text-sm mb-3">
-              <option>Casual</option>
-              <option>Sporting</option>
-              <option>Hype</option>
+              <option>Casual</option><option>Sporting</option><option>Hype</option>
             </select>
             <label className="text-xs text-gray-400">Pause Between Speech (saat)</label>
             <div className="flex items-center gap-2 mt-1">
@@ -275,7 +292,7 @@ export default function Dashboard() {
             <span className="text-sm font-semibold">{shop.productName}</span>
           </div>
           <div className="flex items-center gap-3 mb-3">
-            <span className="text-xs text-purple-300">{"\u2022"} Playback Speed</span>
+            <span className="text-xs text-purple-300">• Playback Speed</span>
             <input type="range" min={1} max={2} step={0.05} value={shop.playbackSpeed} onChange={(e) => setSpeed(+e.target.value)} className="flex-1" />
             <span className="text-sm">{(shop.playbackSpeed || 1).toFixed(2)}x</span>
           </div>
@@ -313,48 +330,45 @@ export default function Dashboard() {
       )}
 
       <div className="mb-3 bg-gray-900 rounded p-4 flex items-center gap-6 text-sm">
-        <span>{"\uD83D\uDC65"} Viewers: <b>{stats.viewers}</b></span>
-        <span>{"\u2764\uFE0F"} Likes: <b>{stats.totalLikes}</b></span>
-        <span>{"\uD83D\uDCAC"} Komen: <b>{stats.comments}</b></span>
-        <span>{"\uD83C\uDF81"} Gifts: <b>{stats.gifts}</b></span>
+        <span>👥 Viewers: <b>{stats.viewers}</b></span>
+        <span>❤️ Likes: <b>{stats.totalLikes}</b></span>
+        <span>💬 Komen: <b>{stats.comments}</b></span>
+        <span>🎁 Gifts: <b>{stats.gifts}</b></span>
       </div>
       <div className="mb-6 bg-gray-900 rounded p-4 text-sm">
-        <span className="font-semibold">{"\uD83D\uDC51"} Penonton VIP:</span>
+        <span className="font-semibold">👑 Penonton VIP:</span>
         {vips.length === 0 ? <span className="text-gray-500 ml-2">belum ada lagi</span> : vips.map((v) => <span key={v} className="ml-2 px-2 py-1 bg-yellow-700 rounded">{v}</span>)}
       </div>
 
       <div className="mb-6 bg-gray-900 rounded p-4 flex items-center gap-3">
-        <span className="text-sm font-semibold">{"\uD83C\uDFB5"} Muzik (YouTube):</span>
+        <span className="text-sm font-semibold">🎵 Muzik (YouTube):</span>
         <input value={musicQ} onChange={(e) => setMusicQ(e.target.value)} placeholder="Tajuk lagu atau URL YouTube" className="bg-gray-800 rounded px-3 py-2 text-sm flex-1" />
-        <button onClick={() => { socket.emit("music:play", { q: musicQ }); setMusicPaused(false); }} className="bg-teal-600 hover:bg-teal-500 px-4 py-2 rounded text-sm">Mainkan</button>
+        <button onClick={handlePlayMusic} className="bg-teal-600 hover:bg-teal-500 px-4 py-2 rounded text-sm">Mainkan</button>
         <button onClick={() => {
-          console.log("[MUSIC] pause/resume click | state:", music.state, "| paused:", musicPaused);
           if (music.state === "PLAYING" && !musicPaused) socket.emit("music:pause", {});
           else if (musicPaused) socket.emit("music:resume", {});
         }} className={"px-4 py-2 rounded text-sm " + (musicPaused ? "bg-green-700 hover:bg-green-600" : "bg-yellow-700 hover:bg-yellow-600")} disabled={music.state !== "PLAYING" && !musicPaused}>
           {musicPaused ? "Play" : "Pause"}
         </button>
-        <button onClick={() => { console.log("[MUSIC] stop click"); socket.emit("music:stop", {}); setMusicPaused(false); }} className="bg-red-700 hover:bg-red-600 px-4 py-2 rounded text-sm">Stop</button>
-        <span className="text-xs text-gray-400 flex-1">{music.state === "FETCHING" ? "Sedang download..." : music.state === "PLAYING" ? (musicPaused ? "Paused: " : "Now playing: ") + music.q : music.state === "FAILED" ? "Tak jumpa lagu tu" : music.state === "CACHE_CLEARED" ? "Lagu " + music.q + " dah habis, cache dibersihkan ✓" : "ready"}</span>
-        <span className="text-xs text-purple-300">{"\uD83D\uDD0A"}</span>
+        <button onClick={() => { socket.emit("music:stop", {}); setMusicPaused(false); }} className="bg-red-700 hover:bg-red-600 px-4 py-2 rounded text-sm">Stop</button>
+        <span className="text-xs text-gray-400 flex-1">{music.state === "FETCHING" ? "Sedang download..." : music.state === "PLAYING" ? (musicPaused ? "Paused: " : "Now playing: ") + music.q : music.state === "FAILED" ? "Tak jumpa lagu tu" : "ready"}</span>
+        <span className="text-xs text-purple-300">🔊</span>
         <input type="range" min={0} max={1} step={0.05} value={musicVolume} onChange={(e) => { const v = +e.target.value; setMusicVolume(v); musicVolumeRef.current = v; if (musicAudio.current) musicAudio.current.volume = v; socket.emit("music:volume", { vol: v }); }} className="w-24" />
         <span className="text-xs w-8">{Math.round(musicVolume * 100)}%</span>
-
       </div>
 
       <div className="mb-4 bg-gray-900 rounded p-3 flex items-center gap-4">
-        <span className="text-sm font-semibold">{"\uD83D\uDC46"} Auto Tapper:</span>
+        <span className="text-sm font-semibold">👆 Auto Tapper:</span>
         <button onClick={() => socket.emit("autoTap:toggle", { enabled: !autoTapEnabled })} className={"px-4 py-2 rounded text-sm font-semibold " + (autoTapEnabled ? "bg-red-700 hover:bg-red-600" : "bg-green-700 hover:bg-green-600")}>
           {autoTapEnabled ? "Stop Auto Tap" : "Start Auto Tap"}
         </button>
         <span className="text-xs text-gray-400">Total: <span className="text-teal-300 font-bold">{autoTapCount}</span></span>
-
         <span className="text-xs text-gray-500">(AI ajak viewer tap tiap 45-90s - likes REAL)</span>
       </div>
 
       {songList.length > 0 && (
         <div className="mb-6 bg-gray-900 rounded p-3">
-          <div className="text-sm font-semibold mb-2">{"\uD83C\uDFBC"} Senarai Permintaan Lagu ({songList.length})</div>
+          <div className="text-sm font-semibold mb-2">🎼 Senarai Permintaan Lagu ({songList.length})</div>
           {songList.map((s: any, i: number) => (
             <div key={i} className="text-xs text-gray-300 py-1 border-b border-gray-800">
               {i + 1}. <span className="text-teal-300 font-semibold">{s.q}</span> — diminta oleh: <span className="text-amber-300">{s.by}</span>
@@ -369,9 +383,7 @@ export default function Dashboard() {
           <div className="aspect-[9/16] bg-gray-800 rounded flex items-center justify-center text-gray-500 overflow-hidden">
             {mode === "SHOPPABLE" && product && product.videoLoopUrl ? (
               <video ref={videoRef} src={product.videoLoopUrl} autoPlay muted loop playsInline className="w-full h-full object-cover" />
-            ) : (
-              "Avatar / Video Feed"
-            )}
+            ) : ("Avatar / Video Feed")}
           </div>
         </div>
 
@@ -448,24 +460,3 @@ export default function Dashboard() {
     </div>
   );
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

@@ -1,44 +1,25 @@
 import { io } from "socket.io-client";
+import { WS_EVENTS } from "@batia/shared";
 
-const username = process.argv[2] || "kak_ros";
-const text = process.argv[3] || "Wah bestnya live malam ni member";
+const args = process.argv.slice(2);
+const isJoin = args[0] === "--join";
+const username = isJoin ? "abam_test_join" : (args[0] || "kak_ros");
+const text = args[1] || "Wah bestnya live malam ni member";
 
-console.log(`\n🚀 Menghantar test komen...`);
-console.log(`👤 Username: "${username}"`);
-console.log(`💬 Komen: "${text}"\n`);
-
-const socket = io("http://localhost:4000", {
-  reconnection: false,
-  timeout: 5000
-});
+console.log("📛 WS_EVENTS.COMMENT_RECEIVED =", JSON.stringify((WS_EVENTS as any).COMMENT_RECEIVED));
+console.log("🚀 Connecting...");
+const socket = io("http://localhost:4000", { reconnection: false });
 
 socket.on("connect", () => {
-  console.log("✅ Connected to backend Socket.IO");
-  
-  // Kita hantar dengan 2 nama event berbeza untuk pastikan satu pun masuk
-  console.log("📤 Menghantar event 'COMMENT_RECEIVED'...");
-  socket.emit("COMMENT_RECEIVED", { username, text });
-  
-  console.log("📤 Menghantar event 'comment:received' (fallback)...");
-  socket.emit("comment:received", { username, text });
-
-  // Dengar semua possible response
-  socket.on("AI_RESPONSE_READY", (data: any) => {
-    console.log("\n🎉 BERJAYA! Backend balas dengan audio:", data.audioUrl);
-  });
-
-  socket.on("disconnect", (reason) => {
-    console.log(`\n⚠️ Disconnected: ${reason}`);
-  });
-  
-  socket.on("connect_error", (err) => {
-    console.error("\n❌ Connection error:", err.message);
-  });
+  console.log("✅ Connected:", socket.id);
+  if (isJoin) { socket.emit("test:join", {}); console.log("👋 test:join dihantar"); return; }
+  const names = Array.from(new Set([(WS_EVENTS as any).COMMENT_RECEIVED, "COMMENT_RECEIVED"].filter(Boolean)));
+  console.log("📤 Emit:", names.join(" + "));
+  for (const n of names) socket.emit(n, { username, text });
 });
 
-// Tunggu 10 saat supaya backend ada masa proses TTS
-setTimeout(() => {
-  console.log("\n⏱️ Masa tamat (10 saat). Menutup sambungan...");
-  socket.disconnect();
-  process.exit(0);
-}, 10000);
+socket.onAny((event: string, data: any) => {
+  console.log("📥 [EVENT]", event, "|", JSON.stringify(data).slice(0, 150));
+});
+
+setTimeout(() => { console.log("⏰ Selesai (15s)"); socket.disconnect(); process.exit(0); }, 15000);

@@ -19,17 +19,16 @@ const execFileAsync = promisify(execFile);
 const PORT = parseInt(process.env.ORCHESTRATOR_PORT || "4000");
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const policyPath = path.resolve(__dirname, "../../../policies/tiktok_my_2026.yaml");
-
 const engine = new LiveContextEngine(new PolicyEngine(policyPath));
+
+console.log("[EVENTS] WS_EVENTS =", JSON.stringify(WS_EVENTS));
 
 try {
   const audioDir = path.join(process.cwd(), "audio");
   if (fs.existsSync(audioDir)) {
     let cleared = 0;
     for (const fn of fs.readdirSync(audioDir)) {
-      if (fn.endsWith(".webm") || fn.endsWith(".mp3") || fn.endsWith(".opus")) {
-        try { fs.unlinkSync(path.join(audioDir, fn)); cleared++; } catch (e) {}
-      }
+      if (fn.endsWith(".webm") || fn.endsWith(".mp3") || fn.endsWith(".opus")) { try { fs.unlinkSync(path.join(audioDir, fn)); cleared++; } catch (e) {} }
     }
     console.log(`[STARTUP] Cleared ${cleared} old audio files - no replay`);
   }
@@ -39,146 +38,77 @@ const recentComments = new Map<string, { text: string; at: number }>();
 function isDuplicateComment(username: string, text: string): boolean {
   const now = Date.now();
   const prev = recentComments.get(username);
-  if (prev && prev.text === text.trim() && now - prev.at < 10000) {
-    console.log(`[DEDUP] Skip repeated comment from ${username}`);
-    return true;
-  }
+  if (prev && prev.text === text.trim() && now - prev.at < 10000) return true;
   recentComments.set(username, { text: text.trim(), at: now });
   return false;
 }
-
 const recentResponses = new Map<string, number>();
 function isDuplicateResponse(text: string): boolean {
   const now = Date.now();
-  for (const [key, at] of recentResponses.entries()) {
-    if (now - at > 5000) recentResponses.delete(key);
-  }
+  for (const [k, at] of recentResponses.entries()) if (now - at > 5000) recentResponses.delete(k);
   const clean = text.trim().toLowerCase();
-  if (recentResponses.has(clean)) {
-    console.log(`[DEDUP] Skip repeated response: ${clean.slice(0, 60)}`);
-    return true;
-  }
+  if (recentResponses.has(clean)) return true;
   recentResponses.set(clean, now);
   return false;
 }
-
 const recentTtsRequests = new Map<string, number>();
-
-function normalizeForDedup(text: string): string {
-  return text.toLowerCase().replace(/[^\w\s]/g, '').replace(/\s+/g, ' ').trim();
+function normalizeForDedup(t: string): string { return t.toLowerCase().replace(/[^\w\s]/g, "").replace(/\s+/g, " ").trim(); }
+function calculateSimilarity(a: string, b: string): number {
+  if (a === b) return 1;
+  if (!a.length || !b.length) return 0;
+  const w1 = new Set(a.split(" ")), w2 = new Set(b.split(" "));
+  const inter = new Set([...w1].filter(x => w2.has(x)));
+  const uni = new Set([...w1, ...w2]);
+  return inter.size / uni.size;
 }
-
-function calculateSimilarity(s1: string, s2: string): number {
-  if (s1 === s2) return 1;
-  if (s1.length === 0 || s2.length === 0) return 0;
-  const longer = s1.length > s2.length ? s1 : s2;
-  const longerLength = longer.length;
-  if (longerLength === 0) return 1;
-  if (Math.abs(s1.length - s2.length) > longerLength * 0.2) return 0;
-  const words1 = new Set(s1.split(' '));
-  const words2 = new Set(s2.split(' '));
-  const intersection = new Set([...words1].filter(x => words2.has(x)));
-  const union = new Set([...words1, ...words2]);
-  return intersection.size / union.size;
-}
-
 function isDuplicateTts(text: string, lang: string): boolean {
   const now = Date.now();
-  const normalized = normalizeForDedup(text);
-  for (const [key, at] of recentTtsRequests.entries()) {
-    if (now - at > 10000) recentTtsRequests.delete(key);
+  const norm = normalizeForDedup(text);
+  for (const [k, at] of recentTtsRequests.entries()) if (now - at > 10000) recentTtsRequests.delete(k);
+  const exact = `${lang}::${norm}`;
+  if (recentTtsRequests.has(exact)) return true;
+  for (const [k] of recentTtsRequests.entries()) {
+    const [kl, kt] = k.split("::");
+    if (kl === lang && calculateSimilarity(norm, kt) > 0.85) return true;
   }
-  const exactKey = `${lang}::${normalized}`;
-  if (recentTtsRequests.has(exactKey)) {
-    console.log(`[TTS DEDUP] BLOCKED exact duplicate: ${text.slice(0, 50)}`);
-    return true;
-  }
-  for (const [key, at] of recentTtsRequests.entries()) {
-    const [keyLang, keyText] = key.split('::');
-    if (keyLang === lang) {
-      const similarity = calculateSimilarity(normalized, keyText);
-      if (similarity > 0.85) {
-        console.log(`[TTS DEDUP] Skip similar audio (${Math.round(similarity * 100)}% match)`);
-        return true;
-      }
-    }
-  }
-  recentTtsRequests.set(exactKey, now);
+  recentTtsRequests.set(exact, now);
   return false;
 }
-
 function normalizeMs(t: string): string {
   const map: [RegExp, string][] = [
-    [/\b[Yy]e\b/g, "ya"],
-    [/\b[Yy]er\b/g, "ya"],
-    [/\b[Bb]ole\b/g, "boleh"],
-    [/\b[Tt]akpe\b/g, "tak apa"],
-    [/\b[Xx]\s*tau\b/g, "tak tau"],
-    [/\b[Xx]\s*nak\b/g, "tak nak"],
-    [/\b[Xx]\s*leh\b/g, "tak boleh"],
+    [/\b[Yy]e\b/g, "ya"], [/\b[Yy]er\b/g, "ya"], [/\b[Bb]ole\b/g, "boleh"],
+    [/\b[Tt]akpe\b/g, "tak apa"], [/\b[Xx]\s*tau\b/g, "tak tau"],
+    [/\b[Xx]\s*nak\b/g, "tak nak"], [/\b[Xx]\s*leh\b/g, "tak boleh"],
   ];
   let out = t;
   for (const [re, rep] of map) out = out.replace(re, rep);
   return out;
 }
-
 function cleanAiOutput(text: string): string {
-  let clean = text;
-  
-  // ✅ AUTO-FIX: Buang semua hyphen/ejaan berjarak (contoh: "t-e-r-i-m-a" jadi "terima")
-  clean = clean.replace(/([a-zA-ZÀ-ÿ])\s*-\s*([a-zA-ZÀ-ÿ])/g, "$1$2");
-  
-  clean = clean.replace(/Mah-lay-see-ah/gi, "Malaysia");
-  clean = clean.replace(/Mah-lay-sia/gi, "Malaysia");
-  clean = clean.replace(/Ma-lay-see-ah/gi, "Malaysia");
-  clean = clean.replace(/Tick[\s-]*Tock/gi, "TikTok");
-  clean = clean.replace(/Tik-tok/gi, "TikTok");
-  clean = clean.replace(/Tik-Tok/gi, "TikTok");
-  clean = clean.replace(/Live-stream/gi, "live stream");
-  clean = clean.replace(/\s+/g, " ").trim();
-  
-  return clean;
+  let c = text;
+  c = c.replace(/([a-zA-ZÀ-ÿ])\s*-\s*([a-zA-ZÀ-ÿ])/g, "$1$2");
+  c = c.replace(/Mah-lay-see-ah|Mah-lay-sia|Ma-lay-see-ah/gi, "Malaysia");
+  c = c.replace(/Tick[\s-]*Tock|Tik-tok|Tik-Tok/gi, "TikTok");
+  c = c.replace(/Live-stream/gi, "live stream");
+  c = c.replace(/\s+/g, " ").trim();
+  return c;
 }
-
-function isValidUsername(uname: string): boolean {
-  if (!uname || uname === "0" || uname === "unknown" || uname.length < 3) {
-    return false;
-  }
-  return true;
-}
-
+function isValidUsername(u: string): boolean { return !(!u || u === "0" || u === "unknown" || u.length < 3); }
 function cleanSongTitle(q: string): string {
-  let clean = q
-    .replace(/^["'""''\s]+|["'""''\s]+$/g, "")
-    .replace(/^[-–—:\s]+|[-–—:\s]+$/g, "")
-    .replace(/\s*\([^)]*\)\s*/g, " ")
-    .replace(/\s*oleh\s+.+$/i, "")
-    .replace(/\s*by\s+.+$/i, "")
-    .replace(/\s*feat\.?\s+.+$/i, "")
-    .replace(/\s*-\s*.*$/, "")
-    .replace(/\s+/g, " ")
-    .trim();
-  return clean;
+  return q.replace(/^["'""''\s]+|["'""''\s]+$/g, "").replace(/^[-–—:\s]+|[-–—:\s]+$/g, "")
+    .replace(/\s*\([^)]*\)\s*/g, " ").replace(/\s*oleh\s+.+$/i, "").replace(/\s*by\s+.+$/i, "")
+    .replace(/\s*feat\.?\s+.+$/i, "").replace(/\s*-\s*.*$/, "").replace(/\s+/g, " ").trim();
 }
 
 const tts = new TtsEngine();
 let currentTtsVoice = "ms-MY-YasminNeural";
-
 function getVoiceForLang(lang: "MS" | "EN"): string {
-  const isMale = /osman|guy|male/i.test(currentTtsVoice);
-  if (lang === "EN") return isMale ? "en-US-GuyNeural" : "en-US-JennyNeural";
-  return isMale ? "ms-MY-OsmanNeural" : "ms-MY-YasminNeural";
+  const male = /osman|guy|male/i.test(currentTtsVoice);
+  if (lang === "EN") return male ? "en-US-GuyNeural" : "en-US-JennyNeural";
+  return male ? "ms-MY-OsmanNeural" : "ms-MY-YasminNeural";
 }
-
-const ttsQueue: Array<{ 
-  text: string; 
-  voiceName: string; 
-  lang: string;
-  resolve: (url: string) => void; 
-  reject: (e: any) => void 
-}> = [];
+const ttsQueue: Array<{ text: string; voiceName: string; lang: string; resolve: (u: string) => void; reject: (e: any) => void }> = [];
 let ttsBusy = false;
-
 async function processTtsQueue() {
   if (ttsBusy) return;
   ttsBusy = true;
@@ -189,37 +119,26 @@ async function processTtsQueue() {
         console.log(`[TTS QUEUE] Setting voice to: ${job.voiceName}`);
         await tts.setVoice(job.voiceName);
         currentTtsVoice = job.voiceName;
-        await new Promise(r => setTimeout(r, 200));
-        const audioUrl = await tts.speak(job.text);
-        job.resolve(audioUrl);
-      } catch (e) {
-        job.reject(e);
-      }
+        await new Promise(r => setTimeout(r, 150));
+        job.resolve(await tts.speak(job.text));
+      } catch (e) { job.reject(e); }
     }
   }
   ttsBusy = false;
 }
-
 async function speakMixed(text: string, forceLang?: "MS" | "EN"): Promise<string> {
-  const cleanedText = cleanAiOutput(text);
+  const cleaned = cleanAiOutput(text);
   let lang: "MS" | "EN";
-  if (forceLang) {
-    lang = forceLang;
-  } else {
-    const englishKeywords = /\b(I'm|you|we|they|he|she|it|from|have|has|the|a|an|is|are|was|were|will|would|can|could|should|must)\b/i;
-    const hasEnglishKeywords = englishKeywords.test(cleanedText);
-    const words = cleanedText.split(/\s+/);
-    const englishWords = words.filter(w => /^[A-Za-z]+$/.test(w) && w.length > 2);
-    const englishRatio = englishWords.length / words.length;
-    lang = (hasEnglishKeywords || englishRatio > 0.6) && words.length > 3 ? "EN" : "MS";
+  if (forceLang) lang = forceLang;
+  else {
+    const enKw = /\b(I'm|you|we|they|he|she|it|from|have|has|the|a|an|is|are|was|were|will|would|can|could|should|must)\b/i;
+    const words = cleaned.split(/\s+/);
+    const enW = words.filter(w => /^[A-Za-z]+$/.test(w) && w.length > 2);
+    lang = (enKw.test(cleaned) || enW.length / words.length > 0.6) && words.length > 3 ? "EN" : "MS";
   }
-  if (isDuplicateTts(cleanedText, lang)) {
-    return "";
-  }
+  if (isDuplicateTts(cleaned, lang)) return "";
   return new Promise((resolve, reject) => {
-    const normalizedText = lang === "MS" ? normalizeMs(cleanedText) : cleanedText;
-    const voiceName = getVoiceForLang(lang);
-    ttsQueue.push({ text: normalizedText, voiceName, lang, resolve, reject });
+    ttsQueue.push({ text: lang === "MS" ? normalizeMs(cleaned) : cleaned, voiceName: getVoiceForLang(lang), lang, resolve, reject });
     processTtsQueue();
   });
 }
@@ -251,8 +170,34 @@ let currentMode = "REGULAR";
 let pitchIdx = 0;
 let lastPitch = Date.now() - 200000;
 let lastGreet = 0;
-
 const lastCommentTime: Record<string, number> = {};
+
+let autoTapEnabled = false;
+let autoTapInterval: NodeJS.Timeout | null = null;
+let autoTapCount = 0;
+function startAutoTap() {
+  if (autoTapInterval) clearTimeout(autoTapInterval);
+  const tick = async () => {
+    if (!autoTapEnabled) return;
+    try {
+      const r = await routeAIRequest("CHITCHAT", [
+        { role: "system", content: "Kau host TikTok Live Malaysia yang sporting. Ajak penonton tap screen atau bagi like, 1 ayat pendek santai Bahasa Melayu pasar. JANGAN emoji, markdown, asterisk." },
+        { role: "user", content: "Ajak penonton tap screen sekarang" },
+      ]);
+      const audioUrl = await speakMixed(r.content, "MS");
+      if (audioUrl) emitResponse({ type: "AUTO_TAP", content: r.content, targetUser: "SEMUA", audioUrl });
+      autoTapCount++;
+      io.emit("autoTap:tick", { count: autoTapCount });
+      io.emit("autoTap:status", { enabled: autoTapEnabled, count: autoTapCount });
+    } catch (e) {}
+    autoTapInterval = setTimeout(tick, 45000 + Math.floor(Math.random() * 45000)) as unknown as NodeJS.Timeout;
+  };
+  autoTapInterval = setTimeout(tick, 5000) as unknown as NodeJS.Timeout;
+}
+function stopAutoTap() { if (autoTapInterval) { clearTimeout(autoTapInterval); clearInterval(autoTapInterval); autoTapInterval = null; } }
+
+let musicVolume = 1.0;
+let isDucking = false;
 
 function handleJoin(uname: string) {
   if (!isValidUsername(uname)) return;
@@ -265,52 +210,39 @@ function handleJoin(uname: string) {
         { role: "system", content: "Kau host TikTok Live Malaysia yang mesra. Sapa penonton baru dengan nama dia. 1 ayat pendek santai Bahasa Melayu pasar. JANGAN emoji, markdown, asterisk. Guna ya bukan ye." },
         { role: "user", content: "Penonton baru join: " + uname },
       ]);
-      if (scriptQueue.running) {
-        scriptQueue.addGreet(r.content, uname);
-      } else {
-        let cleanGreet = r.content;
-        const usernamePatterns = [
-          new RegExp(uname.replace(/_/g, "[\\s_]*"), "gi"),
-          new RegExp(uname.replace(/_/g, " "), "gi"),
-          /abam[_\s]*(test[_\s]*)?join/gi,
-          /test[_\s]*user/gi,
-        ];
-        for (const pattern of usernamePatterns) {
-          cleanGreet = cleanGreet.replace(pattern, "member");
-        }
-        cleanGreet = cleanGreet.replace(/\s+/g, " ").trim();
-        if (isDuplicateResponse(cleanGreet)) return;
-        const audioUrl = await speakMixed(cleanGreet, "MS");
-        if (audioUrl) {
-          emitResponse({ type: "GREET", content: cleanGreet, targetUser: uname, audioUrl });
-        }
+      if (scriptQueue.running) { scriptQueue.addGreet(r.content, uname); }
+      else {
+        let g = r.content;
+        const pats = [new RegExp(uname.replace(/_/g, "[\\s_]*"), "gi"), new RegExp(uname.replace(/_/g, " "), "gi")];
+        for (const p of pats) g = g.replace(p, "member");
+        g = g.replace(/\s+/g, " ").trim();
+        if (isDuplicateResponse(g)) return;
+        const audioUrl = await speakMixed(g, "MS");
+        if (audioUrl) emitResponse({ type: "GREET", content: g, targetUser: uname, audioUrl });
       }
       console.log("[GREET] ->", uname);
-    } catch (e) { console.error("[GREET] error:", e); }
+    } catch (e) {}
   })();
 }
 
 let tick = 0;
-
 async function genPitch(p: any) {
   const sku = p.skus && p.skus[0];
-  const info = "PRODUK: " + p.title +
-    " | DESKRIPSI: " + (p.description || "") +
+  const info = "PRODUK: " + p.title + " | DESKRIPSI: " + (p.description || "") +
     " | SELLING POINTS: " + (p.sellingPoints || []).join("; ") +
     " | PROMO: " + (p.promoType && p.promoType !== "NONE" ? p.promoType + " " + (p.promoValue || "") + (p.promoCode ? " kod " + p.promoCode : "") : "tiada") +
     " | HARGA: RM" + (sku ? sku.price : "") + " | STOK: " + (sku ? sku.stock : "");
   const r = await routeAIRequest("PRODUCT_PITCH", [
-    { role: "system", content: "Kau host TikTok Live Malaysia yang sporting. Buat pitch jualan 2-3 ayat dalam BAHASA MELAYU PASAR santai. Sebut satu selling point, sebut promo/harga kalau ada, ajak tekan beg kuning. JANGAN emoji, markdown, asterisk, hashtag." },
+    { role: "system", content: "Kau host TikTok Live Malaysia yang sporting. Buat pitch jualan 2-3 ayat dalam BAHASA MELAYU PASAR santai. JANGAN emoji, markdown, asterisk, hashtag." },
     { role: "user", content: info },
   ]);
   return r.content;
 }
-
 async function emitProduct() {
   try {
     const p = await prisma.product.findFirst({ where: { isActive: true }, include: { skus: true }, orderBy: { sortOrder: "asc" } });
     if (p) io.emit("shop:product", p);
-  } catch (e) { console.error("[SHOP] emitProduct error:", e); }
+  } catch (e) {}
 }
 
 setInterval(async () => {
@@ -320,13 +252,9 @@ setInterval(async () => {
   emitProduct();
   if (tick % 60 === 0) {
     try {
-      const musicDir = path.join(process.cwd(), "audio", "music");
-      if (fs.existsSync(musicDir)) {
-        const cutoff = Date.now() - 15 * 60 * 1000;
-        for (const fn of fs.readdirSync(musicDir)) {
-          const p = path.join(musicDir, fn);
-          if (fs.statSync(p).mtimeMs < cutoff) { fs.unlinkSync(p); console.log("[MUSIC] cache cleanup:", fn); }
-        }
+      const mDir = path.join(process.cwd(), "audio", "music");
+      if (fs.existsSync(mDir)) for (const fn of fs.readdirSync(mDir)) {
+        if (fn.endsWith(".part") || fn.endsWith(".ytdl")) { try { fs.unlinkSync(path.join(mDir, fn)); } catch (e) {} }
       }
     } catch (e) {}
   }
@@ -336,180 +264,132 @@ setInterval(async () => {
       io.emit(WS_EVENTS.LIVE_VIPS, vips.map((v: any) => v.username));
     } catch (e) {}
   }
-  const keepLikes = likeTimes.filter((t) => now - t < 60000);
-  likeTimes.length = 0;
-  likeTimes.push(...keepLikes);
-  const keepComments = commentTimes.filter((t) => now - t < 60000);
-  commentTimes.length = 0;
-  commentTimes.push(...keepComments);
+  const kl = likeTimes.filter(t => now - t < 60000); likeTimes.length = 0; likeTimes.push(...kl);
+  const kc = commentTimes.filter(t => now - t < 60000); commentTimes.length = 0; commentTimes.push(...kc);
   if (tiktok.connected && likeTimes.length === 0 && commentTimes.length >= 2 && now - lastCue > 180000) {
     lastCue = now;
-    console.log("[CUE] like reminder fired");
     io.emit(WS_EVENTS.HOST_CUE, { text: "Penonton rancak borak tapi like slow ? boleh ajak tap screen sikit!" });
   }
   if (currentMode === "SHOPPABLE" && scriptQueue.running && !scriptQueue.paused) {
-    const hasQueued = scriptQueue.snapshot().items.some((i) => i.type === "PITCH" && i.status === "QUEUED");
-    if (!hasQueued && now - lastPitch > 30000) {
+    const hasQ = scriptQueue.snapshot().items.some(i => i.type === "PITCH" && i.status === "QUEUED");
+    if (!hasQ && now - lastPitch > 30000) {
       lastPitch = now;
       try {
         const products = await prisma.product.findMany({ include: { skus: true }, where: { isActive: true }, orderBy: { sortOrder: "asc" } });
-        if (products.length > 0) {
-          const p = products[pitchIdx % products.length];
-          pitchIdx++;
-          const pitch = await genPitch(p);
-          scriptQueue.addPitch(pitch);
-          console.log("[PITCH] queued:", p.title);
-        }
-      } catch (e) { console.error("[PITCH] error:", e); }
+        if (products.length > 0) { const p = products[pitchIdx % products.length]; pitchIdx++; scriptQueue.addPitch(await genPitch(p)); }
+      } catch (e) {}
     }
   }
 }, 5000);
 
 const musicDir = path.join(process.cwd(), "audio", "music");
+const songFileCache = new Map<string, { filename: string; lastUsed: number }>();
+const failedDownloads = new Map<string, number>();
+
+function findCachedSong(title: string): string | null {
+  const key = title.toLowerCase();
+  const c = songFileCache.get(key);
+  if (c && fs.existsSync(path.join(musicDir, c.filename))) {
+    c.lastUsed = Date.now();
+    console.log(`[MUSIC] ⚡ Cache hit (verified): ${c.filename}`);
+    return "/music/" + c.filename;
+  }
+  return null;
+}
 
 async function fetchMusic(q: string): Promise<string | null> {
+  const cleanTitle = cleanSongTitle(q);
+  const key = cleanTitle.toLowerCase();
+  const lf = failedDownloads.get(key);
+  if (lf && Date.now() - lf < 60000) { console.log(`[MUSIC] ⏭️ Throttle: "${cleanTitle}"`); return null; }
+  const cached = findCachedSong(cleanTitle);
+  if (cached) return cached;
   try {
-    const cacheDir = path.join(musicDir, ".cache");
-    if (fs.existsSync(cacheDir)) fs.rmSync(cacheDir, { recursive: true, force: true });
-  } catch (e) {}
-  try {
-    if (fs.existsSync(musicDir)) {
-      for (const fn of fs.readdirSync(musicDir)) {
-        if (fn.endsWith(".part")) { try { fs.unlinkSync(path.join(musicDir, fn)); } catch (e) {} }
-      }
+    if (fs.existsSync(musicDir)) for (const fn of fs.readdirSync(musicDir)) {
+      if (fn.endsWith(".part") || fn.endsWith(".ytdl")) { try { fs.unlinkSync(path.join(musicDir, fn)); } catch (e) {} }
     }
   } catch (e) {}
-  await new Promise((r) => setTimeout(r, 300));
+  await new Promise(r => setTimeout(r, 300));
   try {
     fs.mkdirSync(musicDir, { recursive: true });
     const isUrl = /https?:\/\//.test(q);
-    const ytdlp = fs.existsSync(path.join(process.cwd(), "..", "..", "tools", "yt-dlp.exe")) ? path.join(process.cwd(), "..", "..", "tools", "yt-dlp.exe") : "yt-dlp";
-    const args = [isUrl ? q : "ytsearch1:" + q, "-f", "bestaudio/best", "-o", path.join(musicDir, "%(id)s.%(ext)s"), "--no-playlist", "--quiet", "--no-warnings", "--no-part", "--no-cache-dir"];
-    await execFileAsync(ytdlp, args, { timeout: 60000 });
-    const files = fs.readdirSync(musicDir).map((fn) => ({ fn, t: fs.statSync(path.join(musicDir, fn)).mtimeMs })).sort((a, b) => b.t - a.t);
-    return files[0] ? "/music/" + files[0].fn : null;
-  } catch (e: any) { 
-    const errMsg = e.message || String(e);
-    if (errMsg.includes("Video unavailable") || errMsg.includes("disabled by the video owner")) {
-      console.warn("[MUSIC] Video disekat, skip:", q);
-    } else if (errMsg.includes("HTTP Error 416") || errMsg.includes("cache")) {
-      console.warn("[MUSIC] Cache issue, clearing...");
-      try {
-        const cacheDir = path.join(musicDir, ".cache");
-        if (fs.existsSync(cacheDir)) fs.rmSync(cacheDir, { recursive: true, force: true });
-      } catch (e2) {}
-    } else if (errMsg.includes("Unable to rename file") || errMsg.includes("WinError 32")) {
-      console.warn("[MUSIC] File locked, cleanup .part files...");
-      try {
-        if (fs.existsSync(musicDir)) {
-          for (const fn of fs.readdirSync(musicDir)) {
-            if (fn.endsWith(".part")) { try { fs.unlinkSync(path.join(musicDir, fn)); } catch (e) {} }
-          }
-        }
-      } catch (e) {}
-    } else {
-      console.error("[MUSIC] fetch error:", errMsg);
+    const ytdlp = fs.existsSync(path.join(process.cwd(), "..", "..", "tools", "yt-dlp.exe"))
+      ? path.join(process.cwd(), "..", "..", "tools", "yt-dlp.exe") : "yt-dlp";
+    console.log(`[MUSIC] Downloading: ${cleanTitle}...`);
+    await execFileAsync(ytdlp, [
+      isUrl ? q : "ytsearch1:" + q, "-f", "bestaudio[ext=m4a]/bestaudio/best",
+      "-o", path.join(musicDir, "%(id)s.%(ext)s"),
+      "--no-playlist", "--quiet", "--no-warnings", "--no-part", "--no-cache-dir"
+    ], { timeout: 60000 });
+    const files = fs.readdirSync(musicDir).filter(fn => !fn.endsWith(".part") && !fn.endsWith(".ytdl"))
+      .map(fn => ({ fn, t: fs.statSync(path.join(musicDir, fn)).mtimeMs })).sort((a, b) => b.t - a.t);
+    if (files.length > 0) {
+      console.log(`[MUSIC] ✅ Downloaded: ${files[0].fn}`);
+      songFileCache.set(key, { filename: files[0].fn, lastUsed: Date.now() });
+      return "/music/" + files[0].fn;
     }
-    return null; 
+    failedDownloads.set(key, Date.now());
+    return null;
+  } catch (e: any) {
+    console.error(`[MUSIC] ❌ Failed "${cleanTitle}":`, (e.message || "").split("\n")[0]);
+    failedDownloads.set(key, Date.now());
+    return null;
   }
 }
 
 let lastSong = 0;
 let currentMusicFile: string | null = null;
-let lastMusicQ = "";
-let musicVolume = 1.0;
-let isDucking = false;
-let autoTapEnabled = false;
-let autoTapInterval: NodeJS.Timeout | null = null;
-let autoTapCount = 0;
-
-function startAutoTap() {
-  if (autoTapInterval) clearInterval(autoTapInterval);
-  const tick = async () => {
-    if (!autoTapEnabled) return;
-    try {
-      const r = await routeAIRequest("CHITCHAT", [
-        { role: "system", content: "Kau host TikTok Live Malaysia yang sporting. Ajak penonton tap screen atau bagi like, 1 ayat pendek santai Bahasa Melayu pasar. JANGAN emoji, markdown, asterisk." },
-        { role: "user", content: "Ajak penonton tap screen sekarang" },
-      ]);
-      const audioUrl = await speakMixed(r.content, "MS");
-      if (audioUrl) {
-        emitResponse({ type: "AUTO_TAP", content: r.content, targetUser: "SEMUA", audioUrl });
-      }
-      autoTapCount++;
-      io.emit("autoTap:tick", { count: autoTapCount, perMin: 0 });
-    } catch (e) {}
-    const next = 45000 + Math.floor(Math.random() * 45000);
-    autoTapInterval = setTimeout(tick, next) as unknown as NodeJS.Timeout;
-  };
-  autoTapInterval = setTimeout(tick, 5000) as unknown as NodeJS.Timeout;
-}
-
-function stopAutoTap() {
-  if (autoTapInterval) { clearTimeout(autoTapInterval); clearInterval(autoTapInterval); autoTapInterval = null; }
-}
-
+let currentlyPlayingQ = "";
 let songQueue: { q: string; by: string }[] = [];
 let songPlaying = false;
-
-function emitSongQueue() { 
-  io.emit("music:queue", songQueue); 
-}
+function emitSongQueue() { io.emit("music:queue", songQueue); }
 
 function skipCurrentSong() {
   if (!songPlaying && songQueue.length === 0) return;
-  try {
-    if (currentMusicFile && fs.existsSync(currentMusicFile)) {
-      fs.unlinkSync(currentMusicFile);
-      console.log("[MUSIC] Skip - deleted:", path.basename(currentMusicFile));
-    }
-  } catch (e) {}
-  currentMusicFile = null;
-  songPlaying = false;
+  currentMusicFile = null; songPlaying = false; currentlyPlayingQ = "";
   io.emit("music:status", { state: "SKIPPED" });
-  setTimeout(() => void playNextInQueue(), 300);
+  if (songQueue.length > 0) setTimeout(() => void playNextInQueue(), 300);
 }
 
 async function playNextInQueue() {
-  if (songPlaying) return;
-  if (songQueue.length === 0) return;
+  if (songPlaying || songQueue.length === 0) return;
   const next = songQueue.shift();
   if (!next) return;
   songPlaying = true;
+  currentlyPlayingQ = next.q;
   emitSongQueue();
   console.log(`[MUSIC] Now playing: ${next.q} (requested by ${next.by})`);
   const sink = audioSink ? audioSink.id : null;
   io.emit("music:status", { state: "FETCHING", q: next.q, audioFor: sink });
   const url = await fetchMusic(next.q);
-  if (url) { 
-    currentMusicFile = path.join(musicDir, path.basename(url)); 
-    lastMusicQ = next.q; 
-    io.emit("music:status", { 
-      state: "PLAYING", 
-      q: next.q, 
-      url: "http://localhost:4000" + url, 
-      audioFor: sink,
-      requestedBy: next.by
-    });
+  if (!songPlaying) { console.log("[MUSIC] ⛔ Stop semasa download - dibatalkan"); return; }
+  if (url) {
+    currentMusicFile = path.join(musicDir, path.basename(url));
+    io.emit("music:status", { state: "PLAYING", q: next.q, url: "http://localhost:4000" + url, audioFor: sink, requestedBy: next.by });
   } else {
-    io.emit("music:status", { state: "FAILED", q: next.q, audioFor: sink }); 
-    console.log("[MUSIC] Lagu gagal download, skip ke seterusnya...");
-    songPlaying = false;
-    setTimeout(() => void playNextInQueue(), 1000);
+    io.emit("music:status", { state: "FAILED", q: next.q, audioFor: sink });
+    songPlaying = false; currentlyPlayingQ = "";
+    setTimeout(() => void playNextInQueue(), 2000);
   }
 }
 
 async function enqueueSong(q: string, by: string) {
   const cleanQ = cleanSongTitle(q);
   if (!cleanQ || cleanQ.length < 2) return;
-  if (songQueue.length >= 5) {
-    console.log(`[MUSIC] Queue penuh (5), discard: ${cleanQ}`);
+  const keyLower = cleanQ.toLowerCase();
+  if (currentlyPlayingQ && currentlyPlayingQ.toLowerCase() === keyLower) {
+    console.log(`[MUSIC] 🔄 Replay: "${cleanQ}" (restart dari awal)`);
+    if (currentMusicFile && fs.existsSync(currentMusicFile)) {
+      io.emit("music:status", {
+        state: "PLAYING", q: cleanQ,
+        url: "http://localhost:4000/music/" + path.basename(currentMusicFile),
+        audioFor: audioSink ? audioSink.id : null, requestedBy: by, replay: true
+      });
+    }
     return;
   }
-  if (songQueue.some(s => s.q.toLowerCase() === cleanQ.toLowerCase())) {
-    console.log(`[MUSIC] Duplicate skipped: ${cleanQ}`);
-    return;
-  }
+  if (songQueue.some(s => s.q.toLowerCase() === keyLower)) { console.log(`[MUSIC] ⏭️ Duplicate in queue: "${cleanQ}"`); return; }
+  if (songQueue.length >= 5) { console.log(`[MUSIC] Queue penuh, discard: "${cleanQ}"`); return; }
   songQueue.push({ q: cleanQ, by });
   emitSongQueue();
   console.log(`[MUSIC] Queued: "${cleanQ}" by ${by}. Size: ${songQueue.length}`);
@@ -517,48 +397,29 @@ async function enqueueSong(q: string, by: string) {
 }
 
 httpServer.on("request", (req, res) => {
-  if (req.url && req.url.startsWith("/music/")) {
-    const file = path.join(musicDir, path.basename(req.url));
+  const serve = (dir: string) => {
+    const file = path.join(dir, path.basename(req.url || ""));
     if (fs.existsSync(file)) {
       const ext = path.extname(file).toLowerCase();
-      const mime = ext === ".webm" ? "audio/webm" : ext === ".m4a" ? "audio/mp4" : ext === ".opus" ? "audio/opus" : ext === ".mp3" ? "audio/mpeg" : "audio/mpeg";
+      const mime = ext === ".webm" ? "audio/webm" : ext === ".m4a" ? "audio/mp4" : ext === ".opus" ? "audio/opus" : "audio/mpeg";
       const stat = fs.statSync(file);
       const range = req.headers.range;
       if (range) {
         const parts = range.replace(/bytes=/, "").split("-");
         const start = parseInt(parts[0], 10) || 0;
         const end = parts[1] ? parseInt(parts[1], 10) : stat.size - 1;
-        res.writeHead(206, { "Content-Range": "bytes " + start + "-" + end + "/" + stat.size, "Accept-Ranges": "bytes", "Content-Length": end - start + 1, "Content-Type": mime });
+        res.writeHead(206, { "Content-Range": `bytes ${start}-${end}/${stat.size}`, "Accept-Ranges": "bytes", "Content-Length": end - start + 1, "Content-Type": mime });
         fs.createReadStream(file, { start, end }).pipe(res);
       } else {
         res.writeHead(200, { "Content-Length": stat.size, "Content-Type": mime, "Accept-Ranges": "bytes" });
         fs.createReadStream(file).pipe(res);
       }
-      return;
+      return true;
     }
-    res.writeHead(404); res.end("not found");
-  }
-  if (req.url && req.url.startsWith("/audio/")) {
-    const file = path.join(process.cwd(), "audio", path.basename(req.url));
-    if (fs.existsSync(file)) {
-      const ext = path.extname(file).toLowerCase();
-      const mime = ext === ".webm" ? "audio/webm" : ext === ".m4a" ? "audio/mp4" : ext === ".opus" ? "audio/opus" : ext === ".mp3" ? "audio/mpeg" : "audio/mpeg";
-      const stat = fs.statSync(file);
-      const range = req.headers.range;
-      if (range) {
-        const parts = range.replace(/bytes=/, "").split("-");
-        const start = parseInt(parts[0], 10) || 0;
-        const end = parts[1] ? parseInt(parts[1], 10) : stat.size - 1;
-        res.writeHead(206, { "Content-Range": "bytes " + start + "-" + end + "/" + stat.size, "Accept-Ranges": "bytes", "Content-Length": end - start + 1, "Content-Type": mime });
-        fs.createReadStream(file, { start, end }).pipe(res);
-      } else {
-        res.writeHead(200, { "Content-Length": stat.size, "Content-Type": mime, "Accept-Ranges": "bytes" });
-        fs.createReadStream(file).pipe(res);
-      }
-      return;
-    }
-    res.writeHead(404); res.end("not found");
-  }
+    return false;
+  };
+  if (req.url && req.url.startsWith("/music/")) { if (serve(musicDir)) return; res.writeHead(404); res.end("not found"); return; }
+  if (req.url && req.url.startsWith("/audio/")) { if (serve(path.join(process.cwd(), "audio"))) return; res.writeHead(404); res.end("not found"); return; }
 });
 
 async function ensureSession() {
@@ -569,127 +430,108 @@ async function ensureSession() {
   return session;
 }
 
-function isValidSongTitle(title: string): boolean {
-  if (!title || title.trim().length < 3) return false;
-  const lowerTitle = title.toLowerCase().trim();
-  const uncertaintyWords = /\b(tak tau|x tau|tau apa|apa tah|random|kot|entah|mana|tak pasti|confuse|buntu)\b/i;
-  if (uncertaintyWords.test(lowerTitle)) return false;
-  const commandWords = /\b(nak|boleh|tolong|sila|please|bagi|minta|request|req|mahu|hendak|nak minta)\b/i;
-  if (commandWords.test(lowerTitle)) return false;
-  const words = lowerTitle.split(/\s+/).filter(w => w.length > 0);
-  if (words.length === 1 && /^(apa|mana|bila|siapa|kenapa|macam|bagaimana|ya|tak|ok)$/i.test(words[0])) return false;
+function isValidSongTitle(t: string): boolean {
+  if (!t || t.trim().length < 3) return false;
+  const l = t.toLowerCase().trim();
+  if (/\b(tak tau|x tau|tau apa|apa tah|random|kot|entah|mana|tak pasti|confuse|buntu)\b/i.test(l)) return false;
+  if (/\b(nak|boleh|tolong|sila|please|bagi|minta|request|req|mahu|hendak|nak minta)\b/i.test(l)) return false;
+  const w = l.split(/\s+/).filter(x => x.length > 0);
+  if (w.length === 1 && /^(apa|mana|bila|siapa|kenapa|macam|bagaimana|ya|tak|ok)$/i.test(w[0])) return false;
   return true;
 }
 
 function sanitizeForRegularMode(text: string): string {
-  let clean = text;
-  const salesPatterns = [/tekan beg kuning/gi, /beg kuning/gi, /beg hijau/gi, /keranjang kuning/gi, /jualan/gi, /jual\b/gi, /produk/gi, /beli\b/gi, /membeli/gi, /order\b/gi, /shopping/gi, /checkout/gi, /promo/gi, /diskaun/gi, /harga/gi, /stok/gi, /beg\b/gi, /cart\b/gi, /troli/gi, /kod\s+\w+/gi, /baucar/gi, /voucher/gi, /flash\s+sale/gi, /sale\b/gi];
-  for (const pattern of salesPatterns) clean = clean.replace(pattern, "");
-  clean = clean.replace(/\s+/g, " ").replace(/\s+([,.!?])/g, "$1").replace(/^[\s,.!?]+/, "").trim();
-  if (!clean || clean.length < 8) clean = "Ok member, jom kita borak santai malam ni!";
-  return clean;
+  let c = text;
+  const pats = [/tekan beg kuning/gi, /beg kuning/gi, /beg hijau/gi, /keranjang kuning/gi, /jualan/gi, /jual\b/gi, /produk/gi, /beli\b/gi, /membeli/gi, /order\b/gi, /shopping/gi, /checkout/gi, /promo/gi, /diskaun/gi, /harga/gi, /stok/gi, /beg\b/gi, /cart\b/gi, /troli/gi, /kod\s+\w+/gi, /baucar/gi, /voucher/gi, /flash\s+sale/gi, /sale\b/gi];
+  for (const p of pats) c = c.replace(p, "");
+  c = c.replace(/\s+/g, " ").replace(/\s+([,.!?])/g, "$1").replace(/^[\s,.!?]+/, "").trim();
+  if (!c || c.length < 8) c = "Ok member, jom kita borak santai malam ni!";
+  return c;
 }
 
-// ✅ FUNGSI PROCESS COMMENT DENGAN DEBUG LOG LENGKAP
 async function processComment(username: string, text: string) {
   console.log(`[DEBUG processComment] DITERIMA: username="${username}", text="${text}"`);
-
-  if (!username || username === "unknown" || username === "0" || username.length < 3) {
-    console.log(`[DEBUG] DITOLAK: username tidak sah atau terlalu pendek ("${username}")`);
-    return;
-  }
-
+  if (!isValidUsername(username)) { console.log(`[DEBUG] DITOLAK: username tidak sah`); return; }
   const now = Date.now();
-  if (lastCommentTime[username] && now - lastCommentTime[username] < 500) {
-    console.log(`[DEBUG] DITOLAK: Spam komen dari "${username}"`);
-    return;
-  }
+  if (lastCommentTime[username] && now - lastCommentTime[username] < 500) { console.log(`[DEBUG] DITOLAK: Spam`); return; }
   lastCommentTime[username] = now;
-  
   try {
-    if (isDuplicateComment(username, text)) {
-      console.log(`[DEBUG] DITOLAK: Komen duplicate dari "${username}"`);
-      return;
-    }
-
+    if (isDuplicateComment(username, text)) { console.log(`[DEBUG] DITOLAK: Duplicate`); return; }
     const session = await ensureSession();
     commentTimes.push(Date.now());
     liveStats.comments++;
     io.emit(WS_EVENTS.COMMENT_LOG, { username, text });
-    
+
     if (songPlaying && !isDucking) {
       isDucking = true;
+      console.log("[DUCKING] 🔇 Muzik dikecilkan untuk AI response");
       io.emit("music:duck", {});
-      setTimeout(() => { if (isDucking) { isDucking = false; io.emit("music:unduck", {}); } }, 8000);
+      setTimeout(() => { if (isDucking) { isDucking = false; console.log("[DUCKING] 🔊 Kembalikan volume muzik"); io.emit("music:unduck", {}); } }, 8000);
     }
-    
-    const lowerText = text.toLowerCase().trim();
-    const skipPatterns = /^(skip|cancel|taknak|tak nak|next|stop lagu|batal|batal kan|next song|skip lagu)$/i;
-    if (skipPatterns.test(lowerText) || lowerText.includes("skip") || lowerText.includes("cancel lagu") || lowerText.includes("taknak lagu")) {
+
+    const lower = text.toLowerCase().trim();
+    const skipPat = /^(skip|cancel|taknak|tak nak|next|stop lagu|batal|batal kan|next song|skip lagu)$/i;
+    if (skipPat.test(lower) || lower.includes("skip") || lower.includes("cancel lagu")) {
       if (songPlaying || songQueue.length > 0) {
-        const skipMsg = `Ok ${username}, lagu di-skip!`;
-        const audioUrl = await speakMixed(skipMsg, "MS");
-        if (audioUrl) emitResponse({ type: "SKIP_CONFIRM", content: skipMsg, targetUser: username, audioUrl });
+        const msg = `Ok ${username}, lagu di-skip!`;
+        const audioUrl = await speakMixed(msg, "MS");
+        if (audioUrl) emitResponse({ type: "SKIP_CONFIRM", content: msg, targetUser: username, audioUrl });
         skipCurrentSong();
         return;
       }
     }
-    
+
     let handledByMusic = false;
     const nowS = Date.now();
-    const explicitRequestPattern = /\b(mainkan|play|pasang|putar|nyanyi|request|req|minta lagu|nak dengar lagu|bagi lagu|on kan lagu|bukak lagu)\s+(lagu\s+)?[a-zA-Z0-9]/i;
-    const directRequestPattern = /\blagu\s+[a-zA-Z0-9][a-zA-Z0-9\s'-]{2,}/i;
-    if (nowS - lastSong > 10000 && (explicitRequestPattern.test(text) || directRequestPattern.test(text))) {
+    const explicitReq = /\b(mainkan|play|pasang|putar|nyanyi|request|req|minta lagu|nak dengar lagu|bagi lagu|on kan lagu|bukak lagu)\s+(lagu\s+)?[a-zA-Z0-9]/i;
+    const directReq = /\blagu\s+[a-zA-Z0-9][a-zA-Z0-9\s'-]{2,}/i;
+    if (nowS - lastSong > 10000 && (explicitReq.test(text) || directReq.test(text))) {
       lastSong = nowS;
       let q = "";
       try {
-        const r = await routeAIRequest("CHITCHAT", [{ 
-          role: "system", content: "Ekstrak tajuk lagu daripada komen penonton. Jawab DENGAN tajuk lagu sahaja (serta artis jika disebut). Tiada ayat lain, tiada tanda petik. Jika TIADA tajuk lagu spesifik disebut, jawab tepat: NONE" 
-        }, { role: "user", content: text }]);
-        q = r.content.replace(/^["'""''\s]+|["'""''\s]+$/g, "").replace(/^[-–—\s]+|[-–—\s]+$/g, "").replace(/\s*\([^)]*\)\s*/g, " ").replace(/\s*oleh\s+.+$/i, "").replace(/\s*by\s+.+$/i, "").replace(/\s*feat\.?\s+.+$/i, "").replace(/\s+/g, " ").trim();
+        const r = await routeAIRequest("CHITCHAT", [
+          { role: "system", content: "Ekstrak tajuk lagu daripada komen penonton. Jawab DENGAN tajuk lagu sahaja (serta artis jika disebut). Tiada ayat lain, tiada tanda petik. Jika TIADA tajuk lagu spesifik disebut, jawab tepat: NONE" },
+          { role: "user", content: text }]);
+        q = cleanSongTitle(r.content);
         console.log("[MUSIC] AI extracted:", JSON.stringify(q));
-      } catch (e) { console.error("[MUSIC] AI extraction error:", e); }
-      
+      } catch (e) {}
       if (q && q !== "NONE" && q.length >= 2 && isValidSongTitle(q)) {
         handledByMusic = true;
         enqueueSong(q, username);
-        const confirmMsg = `Ok ${username}, lagu ${q} masuk queue!`;
-        const audioUrl = await speakMixed(confirmMsg, "MS");
-        if (audioUrl) emitResponse({ type: "SONG_CONFIRM", content: confirmMsg, targetUser: username, audioUrl });
+        const msg = `Ok ${username}, lagu ${q} masuk queue!`;
+        const audioUrl = await speakMixed(msg, "MS");
+        if (audioUrl) emitResponse({ type: "SONG_CONFIRM", content: msg, targetUser: username, audioUrl });
       }
     }
-    
-    const simplePatterns = /^(haha+|hehe+|hihi+|lol|lmao|ok|okay|yes|no|ya|tak|yeap|yup|nice|good|best|mantap|power|ngam+)$/i;
-    if (simplePatterns.test(text.trim())) return;
+
+    const simple = /^(haha+|hehe+|hihi+|lol|lmao|ok|okay|yes|no|ya|tak|yeap|yup|nice|good|best|mantap|power|ngam+)$/i;
+    if (simple.test(text.trim())) return;
     if (handledByMusic) return;
-    
+
     const commentLang = detectLang(text);
     const { response, violations, approvalRequest } = await engine.handleComment(session.id, username, text);
     for (const v of violations) io.emit(WS_EVENTS.POLICY_VIOLATION, v);
     if (approvalRequest) io.emit(WS_EVENTS.APPROVAL_REQUEST, approvalRequest);
-    
+
     if (response) {
-      let cleanResponse = response;
+      let clean = response;
       if (commentLang === "EN") {
-        const malayMarkers = /\b(takde|tak ada|jom|malam ni|member|kita|borak|khabar|waalaikumussalam|santai|lah|je|ni|tu|dah)\b/i;
-        if (malayMarkers.test(cleanResponse)) {
+        const malay = /\b(takde|tak ada|jom|malam ni|member|kita|borak|khabar|waalaikumussalam|santai|lah|je|ni|tu|dah)\b/i;
+        if (malay.test(clean)) {
           try {
             const r = await routeAIRequest("CHITCHAT", [
-              { role: "system", content: "You are a friendly Malaysian TikTok Live host. Reply in NATURAL ENGLISH ONLY. 1-2 short sentences. No Malay words. No emoji, no markdown, no asterisk." },
-              { role: "user", content: text },
-            ]);
-            cleanResponse = r.content;
+              { role: "system", content: "You are a friendly Malaysian TikTok Live host. Reply in NATURAL ENGLISH ONLY. 1-2 short sentences. No Malay words. No emoji, no markdown." },
+              { role: "user", content: text }]);
+            clean = r.content;
           } catch (e) {}
         }
       }
-      if (currentMode === "REGULAR") cleanResponse = sanitizeForRegularMode(cleanResponse);
-      if (isDuplicateResponse(cleanResponse)) return;
-      
-      if (currentMode === "SHOPPABLE" && scriptQueue.running) {
-        scriptQueue.addResponse(cleanResponse, username + ": " + text);
-      } else {
-        const audioUrl = await speakMixed(cleanResponse, commentLang);
-        if (audioUrl) emitResponse({ type: "COMMENT_RESPONSE", content: cleanResponse, targetUser: username, audioUrl });
+      if (currentMode === "REGULAR") clean = sanitizeForRegularMode(clean);
+      if (isDuplicateResponse(clean)) return;
+      if (currentMode === "SHOPPABLE" && scriptQueue.running) scriptQueue.addResponse(clean, username + ": " + text);
+      else {
+        const audioUrl = await speakMixed(clean, commentLang);
+        if (audioUrl) emitResponse({ type: "COMMENT_RESPONSE", content: clean, targetUser: username, audioUrl });
       }
     }
   } catch (e) { console.error("[WS] comment error:", e); }
@@ -702,24 +544,43 @@ async function processGift(username: string, giftName: string, giftValue: number
     let reaction = await engine.handleGift(session.id, username, giftName, giftValue);
     if (currentMode === "REGULAR") reaction = sanitizeForRegularMode(reaction);
     if (isDuplicateResponse(reaction)) return;
+    if (songPlaying && !isDucking) {
+      isDucking = true;
+      io.emit("music:duck", {});
+      setTimeout(() => { if (isDucking) { isDucking = false; io.emit("music:unduck", {}); } }, 8000);
+    }
     const audioUrl = await speakMixed(reaction);
     if (audioUrl) emitResponse({ type: "GIFT_REACTION", content: reaction, targetUser: username, audioUrl });
-  } catch (e) { console.error("[WS] gift error:", e); }
+  } catch (e) {}
 }
 
 io.on("connection", (socket) => {
   console.log("[WS] client connected:", socket.id);
-  if (!audioSink) audioSink = { id: socket.id, label: "LAPTOP" };
+  const oldSink = audioSink ? io.sockets.sockets.get(audioSink.id) : null;
+  if (!audioSink || !oldSink) {
+    audioSink = { id: socket.id, label: "LAPTOP" };
+    console.log("[WS] audio sink auto-claim:", socket.id);
+  }
+  socket.on("disconnect", () => {
+    if (audioSink && audioSink.id === socket.id) { audioSink = null; console.log("[WS] audio sink released"); }
+  });
+
   socket.emit("script:update", scriptQueue.snapshot());
   emitProduct();
-  
+  socket.emit("autoTap:status", { enabled: autoTapEnabled, count: autoTapCount });
+
   socket.on(WS_EVENTS.AUDIO_CLAIM, (data: { label: string }) => {
     audioSink = { id: socket.id, label: data.label };
     io.emit(WS_EVENTS.AUDIO_ROUTE, { id: socket.id, label: data.label });
   });
-  socket.on(WS_EVENTS.COMMENT_RECEIVED, (data: { username: string; text: string }) => processComment(data.username, data.text));
+
+  // ✅ ALIAS: terima komen dari SEMUA nama event (dashboard / script / raw)
+  const onComment = (data: { username: string; text: string }) => processComment(data.username, data.text);
+  socket.on(WS_EVENTS.COMMENT_RECEIVED, onComment);
+  if ((WS_EVENTS as any).COMMENT_RECEIVED !== "COMMENT_RECEIVED") socket.on("COMMENT_RECEIVED", onComment);
+
   socket.on(WS_EVENTS.GIFT_RECEIVED, (data: { username: string; giftName: string; giftValue: number }) => processGift(data.username, data.giftName, data.giftValue));
-  
+
   socket.on(WS_EVENTS.TIKTOK_CONNECT, (data: { username: string }) => {
     io.emit(WS_EVENTS.TIKTOK_STATUS, { status: "CONNECTING..." });
     tiktok.connect(data.username, {
@@ -731,21 +592,20 @@ io.on("connection", (socket) => {
       onJoin: (u) => handleJoin(u),
     });
   });
-  
-  socket.on(WS_EVENTS.TIKTOK_DISCONNECT, () => {
-    tiktok.disconnect();
-    io.emit(WS_EVENTS.TIKTOK_STATUS, { status: "DISCONNECTED" });
+  socket.on(WS_EVENTS.TIKTOK_DISCONNECT, () => { tiktok.disconnect(); io.emit(WS_EVENTS.TIKTOK_STATUS, { status: "DISCONNECTED" }); });
+
+  socket.on("autoTap:toggle", (data: any) => {
+    autoTapEnabled = data.enabled || false;
+    if (autoTapEnabled) startAutoTap(); else stopAutoTap();
+    io.emit("autoTap:status", { enabled: autoTapEnabled, count: autoTapCount });
   });
-  
+
   socket.on("shop:start", async () => {
     try {
       const products = await prisma.product.findMany({ include: { skus: true }, where: { isActive: true }, orderBy: { sortOrder: "asc" } });
       scriptQueue.start(products[0] ? products[0].title : "Produk");
-      for (const p of products.slice(0, 2)) {
-        const pitch = await genPitch(p);
-        scriptQueue.addPitch(pitch);
-      }
-    } catch (e) { console.error("[SHOP] start error:", e); }
+      for (const p of products.slice(0, 2)) scriptQueue.addPitch(await genPitch(p));
+    } catch (e) {}
   });
   socket.on("shop:stop", () => scriptQueue.stop());
   socket.on("shop:pause", () => scriptQueue.pause());
@@ -753,40 +613,29 @@ io.on("connection", (socket) => {
   socket.on("shop:settings", (d: any) => scriptQueue.setSettings(d || {}));
   socket.on("shop:interject", (d: any) => { if (d && d.text) scriptQueue.addPitch(String(d.text).trim()); });
   socket.on("test:join", () => handleJoin("abam_test_join"));
-  
+
   socket.on("music:play", (d: any) => { const q = String((d && d.q) || "").trim(); if (q) void enqueueSong(q, "host"); });
   socket.on("music:skip", () => skipCurrentSong());
-  
-  // ✅ PEMBETULAN: music:stop sekarang bertindak seperti skip (tidak padam queue)
   socket.on("music:stop", () => {
-    try { 
-      if (currentMusicFile && fs.existsSync(currentMusicFile)) fs.unlinkSync(currentMusicFile); 
-    } catch (e) {}
-    currentMusicFile = null;
-    songPlaying = false;
+    console.log("[MUSIC] Stop received - hentikan serta-merta");
+    currentMusicFile = null; songPlaying = false; currentlyPlayingQ = "";
     emitSongQueue();
-    io.emit("music:status", { state: "SKIPPED" });
-    setTimeout(() => void playNextInQueue(), 500); // Sambung main lagu que seterusnya
+    io.emit("music:status", { state: "STOPPED" });
+    if (songQueue.length > 0) setTimeout(() => void playNextInQueue(), 500);
+    else console.log("[MUSIC] Stop: queue kosong, tak auto-play");
+  });
+  socket.on("music:pause", () => io.emit("music:status", { state: "PAUSED" }));
+  socket.on("music:resume", () => io.emit("music:status", { state: "RESUMED" }));
+  socket.on("music:volume", (d: any) => { musicVolume = Math.max(0, Math.min(1, Number(d.vol) || 1)); io.emit("music:status", { state: "VOLUME", vol: musicVolume }); });
+  socket.on("music:duck", () => io.emit("music:volume", { vol: 0.3 }));
+  socket.on("music:unduck", () => io.emit("music:volume", { vol: musicVolume }));
+  socket.on("music:ended", () => {
+    if (!songPlaying) return;
+    songPlaying = false; currentlyPlayingQ = "";
+    setTimeout(() => void playNextInQueue(), 500);
   });
 
-  socket.on("music:pause", () => io.emit("music:status", { state: "PAUSED" }));
-  socket.on("music:resume", () => io.emit("music:status", { state: "PLAYING" }));
-  socket.on("music:volume", (d: any) => { musicVolume = Math.max(0, Math.min(1, Number(d && d.vol) || 1)); io.emit("music:status", { state: "VOLUME", vol: musicVolume }); });
-  socket.on("music:unduck", () => { if (isDucking) { isDucking = false; io.emit("music:unduck", {}); } });
-  
-  socket.on("music:ended", (d: any) => {
-    try {
-      if (!songPlaying) return;
-      if (d && d.file) { 
-        const p = path.join(musicDir, path.basename(String(d.file))); 
-        if (fs.existsSync(p)) { fs.unlinkSync(p); io.emit("music:status", { state: "CACHE_CLEARED", q: lastMusicQ }); } 
-      }
-      songPlaying = false;
-      setTimeout(() => void playNextInQueue(), 500);
-    } catch (e) { console.error("[MUSIC] music:ended error:", e); }
-  });
-  
-  socket.on("shop:config", async (d: { description: string; sellingPoints: string[]; promoValue?: string; promoCode?: string }) => {
+  socket.on("shop:config", async (d: any) => {
     try {
       const p = await prisma.product.findFirst({ where: { isActive: true }, orderBy: { sortOrder: "asc" } });
       if (p) {
@@ -794,10 +643,10 @@ io.on("connection", (socket) => {
         io.emit("shop:configured", { ok: true });
         emitProduct();
       }
-    } catch (e) { console.error("[SHOP] config error:", e); }
+    } catch (e) {}
   });
-  
-  socket.on(WS_EVENTS.APPROVAL_DECISION, async (data: { id: string; decision: "approved" | "rejected"; finalText?: string; username?: string }) => {
+
+  socket.on(WS_EVENTS.APPROVAL_DECISION, async (data: any) => {
     let log: any = null;
     try { log = await prisma.violationLog.findUnique({ where: { id: data.id } }); } catch (e) {}
     try {
@@ -809,20 +658,11 @@ io.on("connection", (socket) => {
       } else {
         if (log) await prisma.violationLog.update({ where: { id: data.id }, data: { humanResolved: true, action: "REJECTED_BY_HUMAN" } }).catch(() => {});
       }
-    } catch (e) { console.error("[WS] approval error:", e); }
+    } catch (e) {}
   });
-  
-  socket.on(WS_EVENTS.MODE_CHANGED, (data: { mode: "REGULAR" | "SHOPPABLE" }) => {
-    engine.setMode(data.mode);
-    currentMode = data.mode;
-  });
-  
-  socket.on(WS_EVENTS.VOICE_CHANGED, async (data: { voice: string }) => {
-    await tts.setVoice(data.voice);
-    currentTtsVoice = data.voice;
-  });
+
+  socket.on(WS_EVENTS.MODE_CHANGED, (data: { mode: "REGULAR" | "SHOPPABLE" }) => { engine.setMode(data.mode); currentMode = data.mode; });
+  socket.on(WS_EVENTS.VOICE_CHANGED, async (data: { voice: string }) => { await tts.setVoice(data.voice); currentTtsVoice = data.voice; });
 });
 
-httpServer.listen(PORT, () => {
-  console.log("BATIA Orchestrator on http://localhost:" + PORT);
-});
+httpServer.listen(PORT, () => console.log("BATIA Orchestrator on http://localhost:" + PORT));
