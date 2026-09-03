@@ -28,47 +28,112 @@ const CASUAL_MAP: Array<[RegExp, string]> = [
 const USERNAME_FIX: Array<[RegExp, string]> = [
   [/_/g, " "],
   [/[-.]/g, " "],
+  [/@/g, ""],
   [/\s+/g, " "],
 ];
 
 const USERNAME_PRONUNCIATION: Array<[RegExp, string]> = [
-  [/\btest\b/gi, "tes"],
-  [/\bjoin\b/gi, "join"],
-  [/\babam\b/gi, "abam"],
-  [/\buser\b/gi, "yuser"],
-  [/\bplayer\b/gi, "pleyer"],
-  [/\bgamer\b/gi, "geymer"],
-  [/\bbro\b/gi, "bro"],
-  [/\bsis\b/gi, "sis"],
+  [/\babam\b/gi, "Abang"],
+  [/\btest\b/gi, "Tes"],
+  [/\bjoin\b/gi, "Join"],
+  [/\buser\b/gi, "Yuser"],
+  [/\bplayer\b/gi, "Pleyer"],
+  [/\bgamer\b/gi, "Geymer"],
+  [/\bbro\b/gi, "Bro"],
+  [/\bsis\b/gi, "Sis"],
+  [/\bking\b/gi, "King"],
+  [/\bqueen\b/gi, "Kuin"],
+  [/\bboss\b/gi, "Bos"],
+  [/\bboy\b/gi, "Boi"],
+  [/\bgirl\b/gi, "Gel"],
+  [/\bstar\b/gi, "Star"],
+  [/\blion\b/gi, "Laion"],
+  [/\btiger\b/gi, "Taiger"],
+  [/\bbear\b/gi, "Ber"],
+  [/\bdragon\b/gi, "Dregen"],
 ];
 
+// ✅ Fonetik Melayu untuk perkataan EN - suara Yasmin/Osman sebut betul
 const PRONUNCIATION_FIX: Array<[RegExp, string]> = [
-  [/\bMalaysia\b/gi, "Mah-lay-see-ah"],
-  [/\bMalaysian\b/gi, "Mah-lay-see-an"],
-  [/\bTikTok\b/gi, "Tick Tock"],
-  [/\blive\b/gi, "laiv"],
-  [/\bfollow\b/gi, "folo"],
-  [/\bbattery\b/gi, "betri"],
-  [/\bshare\b/gi, "syer"],
-  [/\bsharer\b/gi, "syerer"],
-  [/\blink\b/gi, "lingk"],
-  [/\bchill\b/gi, "cil"],
-  [/\bchilling\b/gi, "ciling"],
-  [/\blike\b/gi, "laik"],
-  [/\blikes\b/gi, "laiks"],
-  [/\bscreen\b/gi, "skrin"],
-  [/\bvibes?\b/gi, "vaibs"],
-  [/\bhangout\b/gi, "hengaut"],
-  [/\bsales\b/gi, "seil"],
-  [/\bcheckout\b/gi, "cekaut"],
-  [/\bdiscount\b/gi, "diskaun"],
-  [/\bcod\b/gi, "si-ou-di"],
-  [/\bdm\b/gi, "di-em"],
-  [/\bbio\b/gi, "baio"],
-  [/\bstream\b/gi, "strim"],
-  [/\bstreaming\b/gi, "striming"],
-  [/\btap\b/gi, "tep"],
-  [/\bbest\b/gi, "bes"],
+  [/\bMalaysia\b/gi, "Malaysia"],
+  [/\bTikTok\b/gi, "Tik Tok"],
+  [/\blive\b/gi, "Laiv"],
+  [/\blives\b/gi, "Laivs"],
+  [/\bfollow\b/gi, "Folo"],
+  [/\bfollows\b/gi, "Folos"],
+  [/\bbattery\b/gi, "Betri"],
+  [/\bshare\b/gi, "Syer"],
+  [/\bsharer\b/gi, "Syerer"],
+  [/\blink\b/gi, "Lingk"],
+  [/\bchill\b/gi, "Cil"],
+  [/\bchilling\b/gi, "Ciling"],
+  [/\blike\b/gi, "Laik"],
+  [/\blikes\b/gi, "Laiks"],
+  [/\bscreen\b/gi, "Skrin"],
+  [/\bvibes?\b/gi, "Vaibs"],
+  [/\bhangout\b/gi, "Hengaut"],
+  [/\bsales\b/gi, "Seil"],
+  [/\bsale\b/gi, "Seil"],
+  [/\bcheckout\b/gi, "Cekaut"],
+  [/\bdiscount\b/gi, "Diskaun"],
+  [/\bcod\b/gi, "Si Ou Di"],
+  [/\bdm\b/gi, "Di Em"],
+  [/\bbio\b/gi, "Baio"],
+  [/\bstream\b/gi, "Strim"],
+  [/\bstreaming\b/gi, "Striming"],
+  [/\btap\b/gi, "Tep"],
+  [/\btaps\b/gi, "Teps"],
+  [/\bbest\b/gi, "Bes"],
+  [/\bcool\b/gi, "Kul"],
+  [/\bqueue\b/gi, "Kiu"],
+  [/\bqueues\b/gi, "Kius"],
+  [/\bgift\b/gi, "Gift"],
+  [/\bgifts\b/gi, "Gifts"],
+  [/\bsupport\b/gi, "Suport"],
+  [/\bthanks\b/gi, "Tenks"],
+  [/\bthank\b/gi, "Tenk"],
+  [/\bawesome\b/gi, "Awesom"],
+  [/\bgreat\b/gi, "Gret"],
+  [/\bnice\b/gi, "Nais"],
+  [/\bhello\b/gi, "Helo"],
+  [/\bwelcome\b/gi, "Welkam"],
+  [/\bmember\b/gi, "Member"],
+  [/\bmembers\b/gi, "Members"],
+  [/\bfriend\b/gi, "Fren"],
+  [/\bfriends\b/gi, "Frens"],
+  [/\btoday\b/gi, "Tudei"],
+  [/\btonight\b/gi, "Tunait"],
+  [/\btomorrow\b/gi, "Tumoro"],
+  [/\bmorning\b/gi, "Moning"],
+  [/\bnight\b/gi, "Nait"],
+  [/\bgood\b/gi, "Gud"],
+  [/\bgreat\b/gi, "Gret"],
+  [/\bprice\b/gi, "Prais"],
+  [/\border\b/gi, "Order"],
+  [/\bpromo\b/gi, "Promo"],
+  [/\bcode\b/gi, "Kod"],
+  [/\bcodes\b/gi, "Kods"],
+  [/\bvideo\b/gi, "Video"],
+  [/\bvideos\b/gi, "Videos"],
+  [/\bmusic\b/gi, "Musik"],
+  [/\bsong\b/gi, "Song"],
+  [/\bsongs\b/gi, "Songs"],
+  [/\bplease\b/gi, "Plis"],
+  [/\bsorry\b/gi, "Sori"],
+  [/\bsure\b/gi, "Syur"],
+  [/\bcheck\b/gi, "Cek"],
+  [/\bclick\b/gi, "Klik"],
+  [/\bclicks\b/gi, "Kliks"],
+  [/\btrend\b/gi, "Tren"],
+  [/\btrending\b/gi, "Trending"],
+  [/\bviral\b/gi, "Vairal"],
+  [/\bshare\b/gi, "Syer"],
+  [/\bfamous\b/gi, "Feimos"],
+  [/\bpopular\b/gi, "Popiular"],
+  [/\bview\b/gi, "Viu"],
+  [/\bviews\b/gi, "Vius"],
+  [/\bfollower\b/gi, "Foloer"],
+  [/\bfollowers\b/gi, "Foloers"],
 ];
 
 function casualize(text: string): string {
@@ -80,30 +145,14 @@ function casualize(text: string): string {
   return out.replace(/\s+/g, " ").trim();
 }
 
-function englishize(text: string): string {
-  let out = text;
-  const enOnly: Array<[RegExp, string]> = [
-    [/\bMalaysia\b/gi, "Mah-lay-see-ah"],
-    [/\bMalaysian\b/gi, "Mah-lay-see-an"],
-    [/\bTikTok\b/gi, "Tick Tock"],
-  ];
-  for (const [re, rep] of enOnly) out = out.replace(re, rep);
-  return out;
-}
-
 function detectLang(text: string): "MS" | "EN" {
   const normalized = text.replace(/_/g, " ");
-  const hasGreeting = /(^|\s)(salam|hai|hye|hey|assalam|waalaikum|selamat|jumpa|welkam|welcome)/i.test(normalized);
+  const hasGreeting = /(^|\s)(salam|hai|hye|hey|assalam|waalaikum|selamat|jumpa|welkam|welcome)/i.test(normalized);      
   const ms = (normalized.match(/\b(tak|takde|nak|je|jom|korang|apa|macam|mana|kenapa|dah|ni|tu|kat|kita|saya|awak|aku|kamu|boleh|khabar|assalamualaikum|waalaikumussalam|santai|borak|cerita|harga|stok|beli|cantik|bang|kak|abang|malam|hari|esok|best|syok|memang|betul|kan|dengan|untuk|yang|dan|sila|maaf|lah|wei|woi|geng|member|lepak|salam|hai|hye|jumpa|lagi|terima kasih|tq|ok|oke|okay|eh|ehh|selamat|welkam|welcome|ya|yeah|yup|haah|haha|weh|bro|sis|bang|kak|encik|cik|abam|adik)\b/gi) || []).length;
   const words = Math.max(1, normalized.trim().split(/\s+/).length);
   if (hasGreeting) return "MS";
   return (ms / words >= 0.2 || ms >= 1) ? "MS" : "EN";
 }
-
-const EN_VOICE: Record<string, string> = {
-  "ms-MY-YasminNeural": "en-US-JennyNeural",
-  "ms-MY-OsmanNeural": "en-US-GuyNeural",
-};
 
 export class TtsEngine {
   private instances: Record<string, any> = {};
@@ -140,10 +189,9 @@ export class TtsEngine {
   }
 
   async speak(text: string): Promise<string | null> {
-    const lang = detectLang(text);
-    const voice = lang === "EN" ? (EN_VOICE[this.voice] || "en-US-JennyNeural") : this.voice;
-    const spoken = lang === "MS" ? casualize(text) : englishize(text);
-    console.log("[TTS] lang=" + lang + " voice=" + voice + ":", spoken.slice(0, 80));
+    const voice = this.voice;
+    const spoken = casualize(text);
+    console.log("[TTS] voice=" + voice + ":", spoken.slice(0, 100));
 
     const clean = spoken
       .replace(/[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]+/g, "")
@@ -162,7 +210,7 @@ export class TtsEngine {
     const file = path.join(this.dir, id + ".mp3");
 
     console.log("[TTS] Generating file:", file);
-    console.log("[TTS] Clean text:", clean.slice(0, 100));
+    console.log("[TTS] Clean text:", clean.slice(0, 120));
 
     try {
       const tts = await this.getInstance(voice);
@@ -186,7 +234,6 @@ export class TtsEngine {
       }
     } catch (e: any) {
       console.error("[TTS] ❌ speak error:", e.message);
-      console.error("[TTS] Stack:", e.stack);
       this.instances[voice] = null;
       return null;
     }

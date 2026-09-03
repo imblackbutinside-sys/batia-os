@@ -22,6 +22,7 @@ const policyPath = path.resolve(__dirname, "../../../policies/tiktok_my_2026.yam
 const engine = new LiveContextEngine(new PolicyEngine(policyPath));
 
 console.log("[EVENTS] WS_EVENTS =", JSON.stringify(WS_EVENTS));
+console.log("[BUILD] BATIA v5 - single voice, cool=kul, queue=kiu, abam=abang");
 
 try {
   const audioDir = path.join(process.cwd(), "audio");
@@ -102,11 +103,6 @@ function cleanSongTitle(q: string): string {
 
 const tts = new TtsEngine();
 let currentTtsVoice = "ms-MY-YasminNeural";
-function getVoiceForLang(lang: "MS" | "EN"): string {
-  const male = /osman|guy|male/i.test(currentTtsVoice);
-  if (lang === "EN") return male ? "en-US-GuyNeural" : "en-US-JennyNeural";
-  return male ? "ms-MY-OsmanNeural" : "ms-MY-YasminNeural";
-}
 const ttsQueue: Array<{ text: string; voiceName: string; lang: string; resolve: (u: string) => void; reject: (e: any) => void }> = [];
 let ttsBusy = false;
 async function processTtsQueue() {
@@ -118,7 +114,6 @@ async function processTtsQueue() {
       try {
         console.log(`[TTS QUEUE] Setting voice to: ${job.voiceName}`);
         await tts.setVoice(job.voiceName);
-        currentTtsVoice = job.voiceName;
         await new Promise(r => setTimeout(r, 150));
         job.resolve(await tts.speak(job.text));
       } catch (e) { job.reject(e); }
@@ -126,19 +121,48 @@ async function processTtsQueue() {
   }
   ttsBusy = false;
 }
+
+// ✅ Sebutan: "cool" DIBUANG sini - TtsEngine yang tukar ke "kul" (lowercase, disebut betul)
+const PHONETIC_MAP: Record<string, string> = {
+  "abam": "Abang",
+  "bro": "Bro",
+  "sis": "Sis",
+  "king": "King",
+  "queen": "Kuin",
+  "boss": "Bos",
+  "star": "Star",
+  "test": "Tes",
+  "user": "Yuser",
+  "join": "Join",
+  "live": "Laiv",
+  "gift": "Gift",
+  "thanks": "Tenks",
+  "follow": "Folo",
+  "queue": "Kiu",
+  "queues": "Kius",
+};
+
+function ttsNormalize(t: string): string {
+  return t
+    .replace(/[@_.-]/g, " ")
+    .split(/\s+/)
+    .filter(Boolean)
+    .map(w => {
+      const key = w.toLowerCase();
+      if (PHONETIC_MAP[key]) return PHONETIC_MAP[key];
+      if (/^[a-z]+$/i.test(w)) return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase();
+      return w;
+    })
+    .join(" ");
+}
+
 async function speakMixed(text: string, forceLang?: "MS" | "EN"): Promise<string> {
-  const cleaned = cleanAiOutput(text);
-  let lang: "MS" | "EN";
-  if (forceLang) lang = forceLang;
-  else {
-    const enKw = /\b(I'm|you|we|they|he|she|it|from|have|has|the|a|an|is|are|was|were|will|would|can|could|should|must)\b/i;
-    const words = cleaned.split(/\s+/);
-    const enW = words.filter(w => /^[A-Za-z]+$/.test(w) && w.length > 2);
-    lang = (enKw.test(cleaned) || enW.length / words.length > 0.6) && words.length > 3 ? "EN" : "MS";
-  }
+  const cleaned = ttsNormalize(cleanAiOutput(text));
+  const lang = forceLang || "MS";
   if (isDuplicateTts(cleaned, lang)) return "";
+  console.log("[TTS SPEAK]", lang, ":", cleaned.slice(0, 100));
   return new Promise((resolve, reject) => {
-    ttsQueue.push({ text: lang === "MS" ? normalizeMs(cleaned) : cleaned, voiceName: getVoiceForLang(lang), lang, resolve, reject });
+    ttsQueue.push({ text: lang === "MS" ? normalizeMs(cleaned) : cleaned, voiceName: currentTtsVoice, lang, resolve, reject });
     processTtsQueue();
   });
 }
@@ -148,7 +172,26 @@ const httpServer = createServer();
 const io = new Server(httpServer, { cors: { origin: "*" } });
 
 let audioSink: { id: string; label: string } | null = null;
+let musicVolume = 1.0;
+let isDucking = false;
+let songPlaying = false;
+
+function triggerDuck() {
+  if (!songPlaying || isDucking) return;
+  isDucking = true;
+  console.log("[DUCKING] 🔇 Muzik dikecilkan untuk AI response");
+  io.emit("music:duck", {});
+  setTimeout(() => {
+    if (isDucking) {
+      isDucking = false;
+      console.log("[DUCKING] 🔊 Kembalikan volume muzik");
+      io.emit("music:unduck", {});
+    }
+  }, 8000);
+}
+
 function emitResponse(payload: any) {
+  if (payload.audioUrl) triggerDuck();
   io.emit(WS_EVENTS.AI_RESPONSE_READY, { ...payload, audioFor: audioSink ? audioSink.id : null });
 }
 
@@ -195,9 +238,6 @@ function startAutoTap() {
   autoTapInterval = setTimeout(tick, 5000) as unknown as NodeJS.Timeout;
 }
 function stopAutoTap() { if (autoTapInterval) { clearTimeout(autoTapInterval); clearInterval(autoTapInterval); autoTapInterval = null; } }
-
-let musicVolume = 1.0;
-let isDucking = false;
 
 function handleJoin(uname: string) {
   if (!isValidUsername(uname)) return;
@@ -341,7 +381,6 @@ let lastSong = 0;
 let currentMusicFile: string | null = null;
 let currentlyPlayingQ = "";
 let songQueue: { q: string; by: string }[] = [];
-let songPlaying = false;
 function emitSongQueue() { io.emit("music:queue", songQueue); }
 
 function skipCurrentSong() {
@@ -462,19 +501,12 @@ async function processComment(username: string, text: string) {
     liveStats.comments++;
     io.emit(WS_EVENTS.COMMENT_LOG, { username, text });
 
-    if (songPlaying && !isDucking) {
-      isDucking = true;
-      console.log("[DUCKING] 🔇 Muzik dikecilkan untuk AI response");
-      io.emit("music:duck", {});
-      setTimeout(() => { if (isDucking) { isDucking = false; console.log("[DUCKING] 🔊 Kembalikan volume muzik"); io.emit("music:unduck", {}); } }, 8000);
-    }
-
     const lower = text.toLowerCase().trim();
     const skipPat = /^(skip|cancel|taknak|tak nak|next|stop lagu|batal|batal kan|next song|skip lagu)$/i;
     if (skipPat.test(lower) || lower.includes("skip") || lower.includes("cancel lagu")) {
       if (songPlaying || songQueue.length > 0) {
-        const msg = `Ok ${username}, lagu di-skip!`;
-        const audioUrl = await speakMixed(msg, "MS");
+        const msg = `Ok ${ttsNormalize(username)}, lagu di-skip!`;
+        const audioUrl = await speakMixed(msg);
         if (audioUrl) emitResponse({ type: "SKIP_CONFIRM", content: msg, targetUser: username, audioUrl });
         skipCurrentSong();
         return;
@@ -483,9 +515,12 @@ async function processComment(username: string, text: string) {
 
     let handledByMusic = false;
     const nowS = Date.now();
-    const explicitReq = /\b(mainkan|play|pasang|putar|nyanyi|request|req|minta lagu|nak dengar lagu|bagi lagu|on kan lagu|bukak lagu)\s+(lagu\s+)?[a-zA-Z0-9]/i;
-    const directReq = /\blagu\s+[a-zA-Z0-9][a-zA-Z0-9\s'-]{2,}/i;
-    if (nowS - lastSong > 10000 && (explicitReq.test(text) || directReq.test(text))) {
+    const strongReq = /\b(mainkan|play|pasang|putar|nyanyi|request|req)\b/i;
+    const softReq = /\b(minta|nak|bagi|boleh)\s+lagu\b/i;
+    const directReq = /\blagu\s+[a-zA-Z0-9]/i;
+    const isReq = strongReq.test(text) || softReq.test(text) || directReq.test(text);
+    if (isReq) console.log(`[MUSIC] 🎯 Request pattern match: "${text}"`);
+    if (nowS - lastSong > 10000 && isReq) {
       lastSong = nowS;
       let q = "";
       try {
@@ -498,8 +533,8 @@ async function processComment(username: string, text: string) {
       if (q && q !== "NONE" && q.length >= 2 && isValidSongTitle(q)) {
         handledByMusic = true;
         enqueueSong(q, username);
-        const msg = `Ok ${username}, lagu ${q} masuk queue!`;
-        const audioUrl = await speakMixed(msg, "MS");
+        const msg = `Ok ${ttsNormalize(username)}, lagu ${q} masuk queue!`;
+        const audioUrl = await speakMixed(msg);
         if (audioUrl) emitResponse({ type: "SONG_CONFIRM", content: msg, targetUser: username, audioUrl });
       }
     }
@@ -544,11 +579,6 @@ async function processGift(username: string, giftName: string, giftValue: number
     let reaction = await engine.handleGift(session.id, username, giftName, giftValue);
     if (currentMode === "REGULAR") reaction = sanitizeForRegularMode(reaction);
     if (isDuplicateResponse(reaction)) return;
-    if (songPlaying && !isDucking) {
-      isDucking = true;
-      io.emit("music:duck", {});
-      setTimeout(() => { if (isDucking) { isDucking = false; io.emit("music:unduck", {}); } }, 8000);
-    }
     const audioUrl = await speakMixed(reaction);
     if (audioUrl) emitResponse({ type: "GIFT_REACTION", content: reaction, targetUser: username, audioUrl });
   } catch (e) {}
@@ -574,7 +604,6 @@ io.on("connection", (socket) => {
     io.emit(WS_EVENTS.AUDIO_ROUTE, { id: socket.id, label: data.label });
   });
 
-  // ✅ ALIAS: terima komen dari SEMUA nama event (dashboard / script / raw)
   const onComment = (data: { username: string; text: string }) => processComment(data.username, data.text);
   socket.on(WS_EVENTS.COMMENT_RECEIVED, onComment);
   if ((WS_EVENTS as any).COMMENT_RECEIVED !== "COMMENT_RECEIVED") socket.on("COMMENT_RECEIVED", onComment);
@@ -583,14 +612,33 @@ io.on("connection", (socket) => {
 
   socket.on(WS_EVENTS.TIKTOK_CONNECT, (data: { username: string }) => {
     io.emit(WS_EVENTS.TIKTOK_STATUS, { status: "CONNECTING..." });
-    tiktok.connect(data.username, {
-      onComment: processComment,
-      onGift: processGift,
-      onLike: (n: number) => { likeTimes.push(Date.now()); liveStats.totalLikes += n; },
-      onViewer: (v: number) => { liveStats.viewers = v; },
-      onStatus: (s) => io.emit(WS_EVENTS.TIKTOK_STATUS, { status: s }),
-      onJoin: (u) => handleJoin(u),
-    });
+    try {
+      tiktok.connect(data.username, {
+        onComment: processComment,
+        onGift: processGift,
+        onLike: (n: number) => { likeTimes.push(Date.now()); liveStats.totalLikes += n; },
+        onViewer: (v: number) => { liveStats.viewers = v; },
+        onStatus: (s) => {
+          console.log(`[TikTok] status -> ${s}`);
+          io.emit(WS_EVENTS.TIKTOK_STATUS, { status: s });
+        },
+        onJoin: (u) => handleJoin(u),
+      });
+      let tries = 0;
+      const poll = setInterval(() => {
+        tries++;
+        if (tiktok.connected) {
+          clearInterval(poll);
+          console.log("[TikTok] status -> CONNECTED (poll)");
+          io.emit(WS_EVENTS.TIKTOK_STATUS, { status: "CONNECTED" });
+        } else if (tries > 30) {
+          clearInterval(poll);
+        }
+      }, 1000);
+    } catch (e: any) {
+      console.error("[TikTok] connect error:", (e && e.message) || e);
+      io.emit(WS_EVENTS.TIKTOK_STATUS, { status: "DISCONNECTED" });
+    }
   });
   socket.on(WS_EVENTS.TIKTOK_DISCONNECT, () => { tiktok.disconnect(); io.emit(WS_EVENTS.TIKTOK_STATUS, { status: "DISCONNECTED" }); });
 
@@ -613,6 +661,12 @@ io.on("connection", (socket) => {
   socket.on("shop:settings", (d: any) => scriptQueue.setSettings(d || {}));
   socket.on("shop:interject", (d: any) => { if (d && d.text) scriptQueue.addPitch(String(d.text).trim()); });
   socket.on("test:join", () => handleJoin("abam_test_join"));
+
+  socket.on("music:started", (d: any) => {
+    songPlaying = true;
+    currentlyPlayingQ = String(d?.q || "").toLowerCase();
+    console.log("[MUSIC] sync frontend playing:", currentlyPlayingQ);
+  });
 
   socket.on("music:play", (d: any) => { const q = String((d && d.q) || "").trim(); if (q) void enqueueSong(q, "host"); });
   socket.on("music:skip", () => skipCurrentSong());

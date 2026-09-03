@@ -38,9 +38,10 @@ export default function Dashboard() {
   const [songList, setSongList] = useState<any[]>([]);
   const [music, setMusic] = useState<any>({ state: "IDLE" });
   const musicAudio = useRef<any>(null);
+  const currentQRef = useRef("");
   const videoRef = useRef<HTMLVideoElement>(null);
 
-  // ✅ AUTO-CLAIM SPEAKER bila page buka (suara pasti keluar kat tab ni)
+  // ✅ AUTO-CLAIM SPEAKER bila page buka
   useEffect(() => {
     socket.on(WS_EVENTS.AUDIO_ROUTE, (d: any) => setSpeaker(d.label));
     const label = /Mobi|Android/i.test(navigator.userAgent) ? "PHONE" : "LAPTOP";
@@ -94,7 +95,7 @@ export default function Dashboard() {
   const audioQueue = useRef<string[]>([]);
   const playing = useRef(false);
 
-  // ✅ PLAY AI AUDIO: paksa URL ke port 4000 + log error
+  // ✅ AI AUDIO: paksa URL ke port 4000 + log error
   const playNext = () => {
     if (playing.current) return;
     const raw = audioQueue.current.shift();
@@ -109,6 +110,14 @@ export default function Dashboard() {
   };
 
   useEffect(() => {
+    // ✅ Lepas backend restart, browser report balik lagu tengah main
+    socket.on("connect", () => {
+      const a = musicAudio.current;
+      if (a && !a.paused && !a.ended && currentQRef.current) {
+        console.log("[MUSIC-WEB] sync playing:", currentQRef.current);
+        socket.emit("music:started", { q: currentQRef.current });
+      }
+    });
     socket.on("music:status", (d: any) => {
       if (d.state !== "VOLUME") setMusic((prev: any) => ({ ...prev, ...d }));
       console.log("[MUSIC-WEB] state:", d.state, "| audioFor:", d.audioFor, "| me:", socket.id, "| url:", d.url);
@@ -121,13 +130,18 @@ export default function Dashboard() {
         a.volume = musicVolumeRef.current;
         musicAudio.current = a;
         setLastQ(d.q || "");
+        currentQRef.current = d.q || "";
         a.onended = () => { socket.emit("music:ended", { file: d.url }); setMusic({ state: "IDLE" }); };
-        a.onplay = () => { a.volume = isDucking ? musicVolumeRef.current * 0.2 : musicVolumeRef.current; };
+        a.onplay = () => {
+          a.volume = isDucking ? musicVolumeRef.current * 0.2 : musicVolumeRef.current;
+          socket.emit("music:started", { q: d.q });
+        };
         a.onerror = () => { console.log("[MUSIC-WEB] play error", d.url); socket.emit("music:ended", { file: d.url }); setMusic({ state: "IDLE" }); };
         a.play().catch(() => {});
       }
       if (d.state === "STOPPED" || d.state === "SKIPPED" || d.state === "FAILED") {
         if (musicAudio.current) { musicAudio.current.pause(); musicAudio.current.currentTime = 0; musicAudio.current = null; }
+        currentQRef.current = "";
         setMusicPaused(false);
       }
       if (d.state === "PAUSED") { if (musicAudio.current) musicAudio.current.pause(); setMusicPaused(true); }
@@ -241,7 +255,7 @@ export default function Dashboard() {
       {mode === "SHOPPABLE" && (
         <div className="mb-6 grid grid-cols-2 gap-6">
           <div className="bg-gray-900 rounded p-4">
-            <h2 className="font-semibold mb-3">👨‍💼 Product Details</h2>
+            <h2 className="font-semibold mb-3">👨‍ Product Details</h2>
             <label className="text-xs text-gray-400">Product Description</label>
             <textarea value={prodDesc} onChange={(e) => { setProdDesc(e.target.value); setProdConfigured(false); }} className="w-full bg-gray-800 rounded px-3 py-2 text-sm h-20 mb-3" />
             <label className="text-xs text-gray-400">Selling Points & Promotions (satu per baris)</label>
