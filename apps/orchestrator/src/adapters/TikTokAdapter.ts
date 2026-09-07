@@ -9,14 +9,34 @@ export interface TikTokHandlers {
   onJoin: (username: string) => void;
 }
 
+// ✅ Cari teks chat dalam nested object (fallback untuk format game streaming)
+function extractText(obj: any, depth = 0): string {
+  if (!obj || typeof obj !== "object" || depth > 3) return "";
+  for (const k of ["comment", "text", "message", "content", "describe"]) {
+    if (typeof obj[k] === "string" && obj[k]) return obj[k];
+  }
+  for (const k of Object.keys(obj)) {
+    const v = obj[k];
+    if (v && typeof v === "object") {
+      const t = extractText(v, depth + 1);
+      if (t) return t;
+    }
+  }
+  return "";
+}
+
 export class TikTokAdapter {
   public connected = false;
-  private connection: TikTokLiveConnection | null = null;
+  private connection: any = null;
   private handlers: TikTokHandlers | null = null;
   private username = "";
   private retryTimer: NodeJS.Timeout | null = null;
+  private hbTimer: NodeJS.Timeout | null = null;
   private attempts = 0;
   private manualStop = false;
+  private connecting = false;
+  private chatCount = 0;
+  private likeCount = 0;
 
   async connect(username: string, handlers: TikTokHandlers) {
     if (this.connected) {
@@ -31,18 +51,31 @@ export class TikTokAdapter {
   }
 
   private async attempt() {
-    if (this.connected || this.manualStop) return;
+    if (this.connected || this.manualStop || this.connecting) return;
+    this.connecting = true;
     this.attempts++;
+
+    // ✅ Bersihkan connection lama sebelum buat baru
+    try { this.connection?.disconnect?.(); } catch (e) {}
+    this.connection = null;
+
     console.log(`[TikTok] Connecting to: ${this.username} (attempt ${this.attempts})`);
     try {
-      this.connection = new TikTokLiveConnection(this.username, {});
-      this.registerEvents();
-      await this.connection.connect();
+      const conn = new TikTokLiveConnection(this.username, {});
+      this.connection = conn;
+      this.registerEvents(conn);
+      await conn.connect();
+      if (this.manualStop) { this.connecting = false; return; }
       this.connected = true;
+      this.connecting = false;
       this.attempts = 0;
-      console.log("[TikTok] ✅ connected, roomId:", (this.connection as any).roomId);
+      this.chatCount = 0;
+      this.likeCount = 0;
+      this.startHeartbeat();
+      console.log("[TikTok] ✅ connected, roomId:", conn.roomId);
       this.handlers?.onStatus("CONNECTED");
     } catch (e: any) {
+      this.connecting = false;
       this.connected = false;
       console.error("[TikTok] connect failed:", (e && e.message ? e.message : String(e)).split("\n")[0]);
       this.handlers?.onStatus("CONNECTING...");
@@ -62,16 +95,45 @@ export class TikTokAdapter {
     this.retryTimer = setTimeout(() => void this.attempt(), 10000);
   }
 
-  private registerEvents() {
-    const c = this.connection;
-    if (!c) return;
+  private startHeartbeat() {
+    if (this.hbTimer) clearInterval(this.hbTimer);
+    this.hbTimer = setInterval(() => {
+      console.log(`[TIKTOK HB] connected=${this.connected} | chat=${this.chatCount} | like=${this.likeCount}`);
+    }, 30000);
+  }
 
+  private registerEvents(c: any) {
+    // ✅ CHAT: extractor + debug + skip komen lama
     c.on("chat", (data: any) => {
+      this.chatCount++;
       const username = data?.user?.uniqueId || data?.user?.nickname || "viewer";
-      const text = data?.comment || data?.text || "";
-      if (!text) return;
+      const text = data?.comment || data?.text || data?.message || data?.content || extractText(data);
+
+      if (!text) {
+        console.log(`[TIKTOK CHAT DEBUG] ${username} - EMPTY TEXT`);
+        console.log(`  keys:`, Object.keys(data || {}).join(","));
+        console.log(`  sample:`, JSON.stringify(data).slice(0, 400));
+        return;
+      }
+
+      // ✅ SKIP KOMEN LAMA (>15s): elak baca backlog masa connect/reboot
+      const ct = data?.common?.createTime;
+      if (typeof ct === "number" && ct > 0) {
+        const ctMs = ct > 1e12 ? ct : ct * 1000;
+        const age = Date.now() - ctMs;
+        if (age > 15000) {
+          console.log(`[TIKTOK CHAT] ⏭️ skip komen lama (${Math.round(age / 1000)}s): ${username}`);
+          return;
+        }
+      }
+
       console.log(`[TIKTOK CHAT] ${username}: ${text}`);
       this.handlers?.onComment(username, text);
+    });
+
+    // Emote/sticker - log saja, jangan proses sebagai komen
+    c.on("emote", (data: any) => {
+      console.log(`[TIKTOK EMOTE] ${data?.user?.uniqueId || "viewer"} (sticker - ignored)`);
     });
 
     c.on("gift", (data: any) => {
@@ -83,6 +145,7 @@ export class TikTokAdapter {
     });
 
     c.on("like", (data: any) => {
+      this.likeCount += data?.likeCount || 1;
       this.handlers?.onLike(data?.likeCount || 1);
     });
 
@@ -102,12 +165,14 @@ export class TikTokAdapter {
       console.log("[TikTok] live ended");
       this.connected = false;
       this.manualStop = true;
+      if (this.hbTimer) clearInterval(this.hbTimer);
       this.handlers?.onStatus("STREAM_ENDED");
     });
 
     c.on("disconnected", () => {
       console.log("[TikTok] disconnected - auto-reconnect");
       this.connected = false;
+      if (this.hbTimer) clearInterval(this.hbTimer);
       this.handlers?.onStatus("DISCONNECTED");
       this.scheduleRetry();
     });
@@ -115,8 +180,10 @@ export class TikTokAdapter {
 
   disconnect() {
     this.manualStop = true;
+    this.connecting = false;
     if (this.retryTimer) clearTimeout(this.retryTimer);
-    try { (this.connection as any)?.disconnect?.(); } catch (e) {}
+    if (this.hbTimer) clearInterval(this.hbTimer);
+    try { this.connection?.disconnect?.(); } catch (e) {}
     this.connection = null;
     this.connected = false;
     console.log("[TikTok] disconnected (manual)");

@@ -84,7 +84,7 @@ const PRONUNCIATION_FIX: Array<[RegExp, string]> = [
   [/\btap\b/gi, "Tep"],
   [/\btaps\b/gi, "Teps"],
   [/\bbest\b/gi, "Bes"],
-  [/\bcool\b/gi, "Kul"],
+  [/\bcool\b/gi, "kul"],
   [/\bqueue\b/gi, "Kiu"],
   [/\bqueues\b/gi, "Kius"],
   [/\bgift\b/gi, "Gift"],
