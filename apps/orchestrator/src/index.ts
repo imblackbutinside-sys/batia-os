@@ -22,7 +22,7 @@ const policyPath = path.resolve(__dirname, "../../../policies/tiktok_my_2026.yam
 const engine = new LiveContextEngine(new PolicyEngine(policyPath));
 
 console.log("[EVENTS] WS_EVENTS =", JSON.stringify(WS_EVENTS));
-console.log("[BUILD] BATIA v5 - single voice, cool=kul, queue=kiu, abam=abang");
+console.log("[BUILD] BATIA v7 - dual voice MS/EN natural");
 
 try {
   const audioDir = path.join(process.cwd(), "audio");
@@ -115,54 +115,43 @@ async function processTtsQueue() {
         console.log(`[TTS QUEUE] Setting voice to: ${job.voiceName}`);
         await tts.setVoice(job.voiceName);
         await new Promise(r => setTimeout(r, 150));
-        job.resolve(await tts.speak(job.text));
+        job.resolve(await tts.speak(job.text, job.voiceName));
       } catch (e) { job.reject(e); }
     }
   }
   ttsBusy = false;
 }
 
-// ✅ Sebutan: "cool" DIBUANG sini - TtsEngine yang tukar ke "kul" (lowercase, disebut betul)
-const PHONETIC_MAP: Record<string, string> = {
-  "abam": "Abang",
-  "bro": "Bro",
-  "sis": "Sis",
-  "king": "King",
-  "queen": "Kuin",
-  "boss": "Bos",
-  "star": "Star",
-  "test": "Tes",
-  "user": "Yuser",
-  "join": "Join",
-  "live": "Laiv",
-  "gift": "Gift",
-  "thanks": "Tenks",
-  "follow": "Folo",
-  "queue": "Kiu",
-  "queues": "Kius",
-};
-
+// ✅ Minimal: bersih simbol + fix terbukti sahaja
 function ttsNormalize(t: string): string {
   return t
-    .replace(/[@_.-]/g, " ")
-    .split(/\s+/)
-    .filter(Boolean)
-    .map(w => {
-      const key = w.toLowerCase();
-      if (PHONETIC_MAP[key]) return PHONETIC_MAP[key];
-      if (/^[a-z]+$/i.test(w)) return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase();
-      return w;
-    })
-    .join(" ");
+    .replace(/[@_.]/g, " ")
+    .replace(/\bqueues?\b/gi, "kiu")
+    .replace(/\babam\b/gi, "Abang")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 async function speakMixed(text: string, forceLang?: "MS" | "EN"): Promise<string> {
   const cleaned = ttsNormalize(cleanAiOutput(text));
   const lang = forceLang || "MS";
   if (isDuplicateTts(cleaned, lang)) return "";
-  console.log("[TTS SPEAK]", lang, ":", cleaned.slice(0, 100));
+  
+  // ✅ PILIH VOICE IKUT BAHASA: EN guna Guy/Jenny, MS guna Osman/Yasmin
+  let voiceToUse = currentTtsVoice;
+  if (lang === "EN") {
+    voiceToUse = /osman|guy|male/i.test(currentTtsVoice) ? "en-US-GuyNeural" : "en-US-JennyNeural";
+  }
+  
+  console.log("[TTS SPEAK]", lang, "voice=" + voiceToUse + ":", cleaned.slice(0, 100));
   return new Promise((resolve, reject) => {
-    ttsQueue.push({ text: lang === "MS" ? normalizeMs(cleaned) : cleaned, voiceName: currentTtsVoice, lang, resolve, reject });
+    ttsQueue.push({ 
+      text: lang === "MS" ? normalizeMs(cleaned) : cleaned, 
+      voiceName: voiceToUse,
+      lang, 
+      resolve, 
+      reject 
+    });
     processTtsQueue();
   });
 }
@@ -356,11 +345,28 @@ async function fetchMusic(q: string): Promise<string | null> {
     const ytdlp = fs.existsSync(path.join(process.cwd(), "..", "..", "tools", "yt-dlp.exe"))
       ? path.join(process.cwd(), "..", "..", "tools", "yt-dlp.exe") : "yt-dlp";
     console.log(`[MUSIC] Downloading: ${cleanTitle}...`);
-    await execFileAsync(ytdlp, [
-      isUrl ? q : "ytsearch1:" + q, "-f", "bestaudio[ext=m4a]/bestaudio/best",
+    
+    const args = [
+      isUrl ? q : "ytsearch1:" + q,
+      "-f", "bestaudio[ext=m4a]/bestaudio/best",
       "-o", path.join(musicDir, "%(id)s.%(ext)s"),
-      "--no-playlist", "--quiet", "--no-warnings", "--no-part", "--no-cache-dir"
-    ], { timeout: 60000 });
+      "--no-playlist", "--quiet", "--no-warnings", "--no-part", "--no-cache-dir",
+      "--cookies-from-browser", "chrome"
+    ];
+    
+    let attempts = 0;
+    while (attempts < 3) {
+      attempts++;
+      try {
+        await execFileAsync(ytdlp, args, { timeout: 60000 });
+        break;
+      } catch (err: any) {
+        if (attempts >= 3) throw err;
+        console.log(`[MUSIC] Retry ${attempts}/3 for "${cleanTitle}"...`);
+        await new Promise(r => setTimeout(r, 2000));
+      }
+    }
+    
     const files = fs.readdirSync(musicDir).filter(fn => !fn.endsWith(".part") && !fn.endsWith(".ytdl"))
       .map(fn => ({ fn, t: fs.statSync(path.join(musicDir, fn)).mtimeMs })).sort((a, b) => b.t - a.t);
     if (files.length > 0) {
@@ -371,7 +377,9 @@ async function fetchMusic(q: string): Promise<string | null> {
     failedDownloads.set(key, Date.now());
     return null;
   } catch (e: any) {
-    console.error(`[MUSIC] ❌ Failed "${cleanTitle}":`, (e.message || "").split("\n")[0]);
+    const errMsg = (e.message || "").split("\n").slice(0, 5).join("\n  ");
+    console.error(`[MUSIC] ❌ Failed "${cleanTitle}":`);
+    console.error(`  ${errMsg}`);
     failedDownloads.set(key, Date.now());
     return null;
   }
@@ -506,7 +514,7 @@ async function processComment(username: string, text: string) {
     if (skipPat.test(lower) || lower.includes("skip") || lower.includes("cancel lagu")) {
       if (songPlaying || songQueue.length > 0) {
         const msg = `Ok ${ttsNormalize(username)}, lagu di-skip!`;
-        const audioUrl = await speakMixed(msg);
+        const audioUrl = await speakMixed(msg, "MS");
         if (audioUrl) emitResponse({ type: "SKIP_CONFIRM", content: msg, targetUser: username, audioUrl });
         skipCurrentSong();
         return;
@@ -534,7 +542,7 @@ async function processComment(username: string, text: string) {
         handledByMusic = true;
         enqueueSong(q, username);
         const msg = `Ok ${ttsNormalize(username)}, lagu ${q} masuk queue!`;
-        const audioUrl = await speakMixed(msg);
+        const audioUrl = await speakMixed(msg, "MS");
         if (audioUrl) emitResponse({ type: "SONG_CONFIRM", content: msg, targetUser: username, audioUrl });
       }
     }
