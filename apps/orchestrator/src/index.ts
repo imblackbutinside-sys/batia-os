@@ -22,7 +22,7 @@ const policyPath = path.resolve(__dirname, "../../../policies/tiktok_my_2026.yam
 const engine = new LiveContextEngine(new PolicyEngine(policyPath));
 
 console.log("[EVENTS] WS_EVENTS =", JSON.stringify(WS_EVENTS));
-console.log("[BUILD] BATIA v7 - dual voice MS/EN natural");
+console.log("[BUILD] BATIA v8.4 - fresh response + fast AI");
 
 try {
   const audioDir = path.join(process.cwd(), "audio");
@@ -44,9 +44,10 @@ function isDuplicateComment(username: string, text: string): boolean {
   return false;
 }
 const recentResponses = new Map<string, number>();
+// ✅ Window pendek (3s) - response fresh setiap masa
 function isDuplicateResponse(text: string): boolean {
   const now = Date.now();
-  for (const [k, at] of recentResponses.entries()) if (now - at > 5000) recentResponses.delete(k);
+  for (const [k, at] of recentResponses.entries()) if (now - at > 3000) recentResponses.delete(k);
   const clean = text.trim().toLowerCase();
   if (recentResponses.has(clean)) return true;
   recentResponses.set(clean, now);
@@ -62,16 +63,13 @@ function calculateSimilarity(a: string, b: string): number {
   const uni = new Set([...w1, ...w2]);
   return inter.size / uni.size;
 }
+// ✅ Window 5s + exact match sahaja (bukan similarity) - AI boleh bagi variasi
 function isDuplicateTts(text: string, lang: string): boolean {
   const now = Date.now();
   const norm = normalizeForDedup(text);
-  for (const [k, at] of recentTtsRequests.entries()) if (now - at > 10000) recentTtsRequests.delete(k);
+  for (const [k, at] of recentTtsRequests.entries()) if (now - at > 5000) recentTtsRequests.delete(k);
   const exact = `${lang}::${norm}`;
   if (recentTtsRequests.has(exact)) return true;
-  for (const [k] of recentTtsRequests.entries()) {
-    const [kl, kt] = k.split("::");
-    if (kl === lang && calculateSimilarity(norm, kt) > 0.85) return true;
-  }
   recentTtsRequests.set(exact, now);
   return false;
 }
@@ -122,7 +120,6 @@ async function processTtsQueue() {
   ttsBusy = false;
 }
 
-// ✅ Minimal: bersih simbol + fix terbukti sahaja
 function ttsNormalize(t: string): string {
   return t
     .replace(/[@_.]/g, " ")
@@ -137,7 +134,6 @@ async function speakMixed(text: string, forceLang?: "MS" | "EN"): Promise<string
   const lang = forceLang || "MS";
   if (isDuplicateTts(cleaned, lang)) return "";
   
-  // ✅ PILIH VOICE IKUT BAHASA: EN guna Guy/Jenny, MS guna Osman/Yasmin
   let voiceToUse = currentTtsVoice;
   if (lang === "EN") {
     voiceToUse = /osman|guy|male/i.test(currentTtsVoice) ? "en-US-GuyNeural" : "en-US-JennyNeural";
@@ -228,6 +224,15 @@ function startAutoTap() {
 }
 function stopAutoTap() { if (autoTapInterval) { clearTimeout(autoTapInterval); clearInterval(autoTapInterval); autoTapInterval = null; } }
 
+// ✅ Clear semua cache - response fresh selepas ni
+function clearAllCaches() {
+  recentComments.clear();
+  recentResponses.clear();
+  recentTtsRequests.clear();
+  Object.keys(lastCommentTime).forEach(k => delete lastCommentTime[k]);
+  console.log("[CACHE] ✅ All caches cleared - fresh responses ready");
+}
+
 function handleJoin(uname: string) {
   if (!isValidUsername(uname)) return;
   const now = Date.now();
@@ -314,6 +319,30 @@ setInterval(async () => {
 const musicDir = path.join(process.cwd(), "audio", "music");
 const songFileCache = new Map<string, { filename: string; lastUsed: number }>();
 const failedDownloads = new Map<string, number>();
+const cacheFile = path.join(musicDir, "cache.json");
+
+function loadCache() {
+  try {
+    fs.mkdirSync(musicDir, { recursive: true });
+    if (fs.existsSync(cacheFile)) {
+      const obj = JSON.parse(fs.readFileSync(cacheFile, "utf8"));
+      for (const k of Object.keys(obj)) {
+        if (obj[k] && obj[k].filename && fs.existsSync(path.join(musicDir, obj[k].filename))) {
+          songFileCache.set(k, obj[k]);
+        }
+      }
+      console.log(`[MUSIC] Loaded ${songFileCache.size} cached songs from disk`);
+    }
+  } catch (e) {}
+}
+function saveCache() {
+  try {
+    const obj: any = {};
+    for (const [k, v] of songFileCache.entries()) obj[k] = v;
+    fs.writeFileSync(cacheFile, JSON.stringify(obj));
+  } catch (e) {}
+}
+loadCache();
 
 function findCachedSong(title: string): string | null {
   const key = title.toLowerCase();
@@ -321,6 +350,7 @@ function findCachedSong(title: string): string | null {
   if (c && fs.existsSync(path.join(musicDir, c.filename))) {
     c.lastUsed = Date.now();
     console.log(`[MUSIC] ⚡ Cache hit (verified): ${c.filename}`);
+    saveCache();
     return "/music/" + c.filename;
   }
   return null;
@@ -345,33 +375,26 @@ async function fetchMusic(q: string): Promise<string | null> {
     const ytdlp = fs.existsSync(path.join(process.cwd(), "..", "..", "tools", "yt-dlp.exe"))
       ? path.join(process.cwd(), "..", "..", "tools", "yt-dlp.exe") : "yt-dlp";
     console.log(`[MUSIC] Downloading: ${cleanTitle}...`);
-    
+
+    const cookiesPath = path.join(process.cwd(), "..", "..", "tools", "cookies.txt");
     const args = [
       isUrl ? q : "ytsearch1:" + q,
       "-f", "bestaudio[ext=m4a]/bestaudio/best",
       "-o", path.join(musicDir, "%(id)s.%(ext)s"),
-      "--no-playlist", "--quiet", "--no-warnings", "--no-part", "--no-cache-dir",
-      "--cookies-from-browser", "chrome"
+      "--no-playlist", "--quiet", "--no-warnings", "--no-cache-dir",
+      "--cookies", cookiesPath
     ];
-    
-    let attempts = 0;
-    while (attempts < 3) {
-      attempts++;
-      try {
-        await execFileAsync(ytdlp, args, { timeout: 60000 });
-        break;
-      } catch (err: any) {
-        if (attempts >= 3) throw err;
-        console.log(`[MUSIC] Retry ${attempts}/3 for "${cleanTitle}"...`);
-        await new Promise(r => setTimeout(r, 2000));
-      }
-    }
-    
-    const files = fs.readdirSync(musicDir).filter(fn => !fn.endsWith(".part") && !fn.endsWith(".ytdl"))
+
+    const start = Date.now();
+    await execFileAsync(ytdlp, args, { timeout: 12000 });
+    console.log(`[MUSIC] ✅ yt-dlp done in ${((Date.now() - start) / 1000).toFixed(1)}s`);
+
+    const files = fs.readdirSync(musicDir)
+      .filter(fn => !fn.endsWith(".part") && !fn.endsWith(".ytdl") && !fn.endsWith(".json"))
       .map(fn => ({ fn, t: fs.statSync(path.join(musicDir, fn)).mtimeMs })).sort((a, b) => b.t - a.t);
     if (files.length > 0) {
-      console.log(`[MUSIC] ✅ Downloaded: ${files[0].fn}`);
       songFileCache.set(key, { filename: files[0].fn, lastUsed: Date.now() });
+      saveCache();
       return "/music/" + files[0].fn;
     }
     failedDownloads.set(key, Date.now());
@@ -532,7 +555,7 @@ async function processComment(username: string, text: string) {
       lastSong = nowS;
       let q = "";
       try {
-        const r = await routeAIRequest("CHITCHAT", [
+        const r = await routeAIRequest("SONG_EXTRACT", [
           { role: "system", content: "Ekstrak tajuk lagu daripada komen penonton. Jawab DENGAN tajuk lagu sahaja (serta artis jika disebut). Tiada ayat lain, tiada tanda petik. Jika TIADA tajuk lagu spesifik disebut, jawab tepat: NONE" },
           { role: "user", content: text }]);
         q = cleanSongTitle(r.content);
@@ -598,6 +621,7 @@ io.on("connection", (socket) => {
   if (!audioSink || !oldSink) {
     audioSink = { id: socket.id, label: "LAPTOP" };
     console.log("[WS] audio sink auto-claim:", socket.id);
+    clearAllCaches();
   }
   socket.on("disconnect", () => {
     if (audioSink && audioSink.id === socket.id) { audioSink = null; console.log("[WS] audio sink released"); }
@@ -669,6 +693,11 @@ io.on("connection", (socket) => {
   socket.on("shop:settings", (d: any) => scriptQueue.setSettings(d || {}));
   socket.on("shop:interject", (d: any) => { if (d && d.text) scriptQueue.addPitch(String(d.text).trim()); });
   socket.on("test:join", () => handleJoin("abam_test_join"));
+
+  socket.on("cache:clear", () => {
+    clearAllCaches();
+    socket.emit("cache:cleared", { ok: true });
+  });
 
   socket.on("music:started", (d: any) => {
     songPlaying = true;

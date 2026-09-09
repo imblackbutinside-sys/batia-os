@@ -32,11 +32,10 @@ const USERNAME_FIX: Array<[RegExp, string]> = [
   [/\s+/g, " "],
 ];
 
+// ✅ Tanpa test→tes dan user→yuser (username natural)
 const USERNAME_PRONUNCIATION: Array<[RegExp, string]> = [
   [/\babam\b/gi, "Abang"],
-  [/\btest\b/gi, "tes"],
   [/\bjoin\b/gi, "join"],
-  [/\buser\b/gi, "yuser"],
   [/\bplayer\b/gi, "pleyer"],
   [/\bgamer\b/gi, "geymer"],
   [/\bbro\b/gi, "bro"],
@@ -84,7 +83,7 @@ function casualizeMs(text: string): string {
   return out.replace(/\s+/g, " ").trim();
 }
 
-// ✅ EN: minimal - username fix + TikTok fix sahaja, biar voice EN sebut natural
+// ✅ EN: minimal - username fix + TikTok fix sahaja
 function casualizeEn(text: string): string {
   let out = text;
   for (const [re, rep] of USERNAME_FIX) out = out.replace(re, rep);
@@ -136,7 +135,6 @@ export class TtsEngine {
     }
   }
 
-  // ✅ Accept overrideVoice untuk guna suara berbeza ikut bahasa response
   async speak(text: string, overrideVoice?: string): Promise<string | null> {
     const voice = overrideVoice || this.voice;
     const lang = detectLang(text);
