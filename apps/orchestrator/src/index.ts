@@ -22,7 +22,7 @@ const policyPath = path.resolve(__dirname, "../../../policies/tiktok_my_2026.yam
 const engine = new LiveContextEngine(new PolicyEngine(policyPath));
 
 console.log("[EVENTS] WS_EVENTS =", JSON.stringify(WS_EVENTS));
-console.log("[BUILD] BATIA v8.4 - fresh response + fast AI");
+console.log("[BUILD] BATIA v8.5 - exact song file match");
 
 try {
   const audioDir = path.join(process.cwd(), "audio");
@@ -44,7 +44,6 @@ function isDuplicateComment(username: string, text: string): boolean {
   return false;
 }
 const recentResponses = new Map<string, number>();
-// ✅ Window pendek (3s) - response fresh setiap masa
 function isDuplicateResponse(text: string): boolean {
   const now = Date.now();
   for (const [k, at] of recentResponses.entries()) if (now - at > 3000) recentResponses.delete(k);
@@ -55,15 +54,6 @@ function isDuplicateResponse(text: string): boolean {
 }
 const recentTtsRequests = new Map<string, number>();
 function normalizeForDedup(t: string): string { return t.toLowerCase().replace(/[^\w\s]/g, "").replace(/\s+/g, " ").trim(); }
-function calculateSimilarity(a: string, b: string): number {
-  if (a === b) return 1;
-  if (!a.length || !b.length) return 0;
-  const w1 = new Set(a.split(" ")), w2 = new Set(b.split(" "));
-  const inter = new Set([...w1].filter(x => w2.has(x)));
-  const uni = new Set([...w1, ...w2]);
-  return inter.size / uni.size;
-}
-// ✅ Window 5s + exact match sahaja (bukan similarity) - AI boleh bagi variasi
 function isDuplicateTts(text: string, lang: string): boolean {
   const now = Date.now();
   const norm = normalizeForDedup(text);
@@ -224,7 +214,6 @@ function startAutoTap() {
 }
 function stopAutoTap() { if (autoTapInterval) { clearTimeout(autoTapInterval); clearInterval(autoTapInterval); autoTapInterval = null; } }
 
-// ✅ Clear semua cache - response fresh selepas ni
 function clearAllCaches() {
   recentComments.clear();
   recentResponses.clear();
@@ -371,6 +360,13 @@ async function fetchMusic(q: string): Promise<string | null> {
   await new Promise(r => setTimeout(r, 300));
   try {
     fs.mkdirSync(musicDir, { recursive: true });
+
+    // ✅ Snapshot folder SEBELUM download (kesan file baru dengan tepat)
+    const before = new Map<string, number>();
+    for (const fn of fs.readdirSync(musicDir)) {
+      if (!fn.endsWith(".json")) before.set(fn, fs.statSync(path.join(musicDir, fn)).mtimeMs);
+    }
+
     const isUrl = /https?:\/\//.test(q);
     const ytdlp = fs.existsSync(path.join(process.cwd(), "..", "..", "tools", "yt-dlp.exe"))
       ? path.join(process.cwd(), "..", "..", "tools", "yt-dlp.exe") : "yt-dlp";
@@ -382,21 +378,41 @@ async function fetchMusic(q: string): Promise<string | null> {
       "-f", "bestaudio[ext=m4a]/bestaudio/best",
       "-o", path.join(musicDir, "%(id)s.%(ext)s"),
       "--no-playlist", "--quiet", "--no-warnings", "--no-cache-dir",
-      "--cookies", cookiesPath
+      "--cookies", cookiesPath,
+      "--print", "after_move:filepath"
     ];
 
     const start = Date.now();
-    await execFileAsync(ytdlp, args, { timeout: 12000 });
+    const { stdout } = await execFileAsync(ytdlp, args, { timeout: 12000 });
     console.log(`[MUSIC] ✅ yt-dlp done in ${((Date.now() - start) / 1000).toFixed(1)}s`);
 
-    const files = fs.readdirSync(musicDir)
-      .filter(fn => !fn.endsWith(".part") && !fn.endsWith(".ytdl") && !fn.endsWith(".json"))
-      .map(fn => ({ fn, t: fs.statSync(path.join(musicDir, fn)).mtimeMs })).sort((a, b) => b.t - a.t);
-    if (files.length > 0) {
-      songFileCache.set(key, { filename: files[0].fn, lastUsed: Date.now() });
-      saveCache();
-      return "/music/" + files[0].fn;
+    // ✅ 1) Path TEPAT dari output yt-dlp (tak boleh silap lagu lagi)
+    let filename = "";
+    const lines = (stdout || "").trim().split(/\r?\n/).filter(Boolean);
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const p = lines[i].trim();
+      if (p && fs.existsSync(p) && path.resolve(path.dirname(p)) === path.resolve(musicDir)) {
+        filename = path.basename(p);
+        break;
+      }
     }
+
+    // ✅ 2) Fallback: file baru/berubah dari snapshot
+    if (!filename) {
+      for (const fn of fs.readdirSync(musicDir)) {
+        if (fn.endsWith(".json") || fn.endsWith(".part") || fn.endsWith(".ytdl")) continue;
+        const t = fs.statSync(path.join(musicDir, fn)).mtimeMs;
+        if (!before.has(fn) || t > (before.get(fn) || 0)) filename = fn;
+      }
+    }
+
+    if (filename) {
+      songFileCache.set(key, { filename, lastUsed: Date.now() });
+      saveCache();
+      console.log(`[MUSIC] 🎵 File tepat: ${filename}`);
+      return "/music/" + filename;
+    }
+    console.error(`[MUSIC] ❌ No new file for "${cleanTitle}" - tak main lagu salah`);
     failedDownloads.set(key, Date.now());
     return null;
   } catch (e: any) {
