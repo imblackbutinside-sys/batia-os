@@ -22,7 +22,7 @@ const policyPath = path.resolve(__dirname, "../../../policies/tiktok_my_2026.yam
 const engine = new LiveContextEngine(new PolicyEngine(policyPath));
 
 console.log("[EVENTS] WS_EVENTS =", JSON.stringify(WS_EVENTS));
-console.log("[BUILD] BATIA v8.5 - exact song file match");
+console.log("[BUILD] BATIA v8.7 - PC/Heart Me = gift sokongan (context betul)");
 
 try {
   const audioDir = path.join(process.cwd(), "audio");
@@ -88,6 +88,33 @@ function cleanSongTitle(q: string): string {
     .replace(/\s*\([^)]*\)\s*/g, " ").replace(/\s*oleh\s+.+$/i, "").replace(/\s*by\s+.+$/i, "")
     .replace(/\s*feat\.?\s+.+$/i, "").replace(/\s*-\s*.*$/, "").replace(/\s+/g, " ").trim();
 }
+
+// ✅ Dictionary TikTok Malaysia - single-pass (tak bertindih)
+const SLANG_RE = /\b(punch\s*card|pc|heart\s*me|heartme|hati\s*oren|love\s*oren|tap\s*tap\s*love|tap\s*skrin|tap\s*screen|beg\s*kuning|beg\s*shopping|fyp|f4f|l4l|pk\s*battle|join\s*battle)\b/gi;
+const SLANG_MAP: Record<string, string> = {
+  "punch card": "gift Heart Me (tanda kehadiran dan sokongan untuk host)",
+  "pc": "gift Heart Me (tanda kehadiran dan sokongan untuk host)",
+  "heart me": "gift Heart Me (hati oren, tanda kehadiran)",
+  "heartme": "gift Heart Me (hati oren, tanda kehadiran)",
+  "hati oren": "gift Heart Me (hati oren, tanda kehadiran)",
+  "love oren": "gift Heart Me (hati oren, tanda kehadiran)",
+  "tap tap love": "tap screen bagi like",
+  "tap skrin": "tap screen untuk bagi like",
+  "tap screen": "tap screen untuk bagi like",
+  "beg kuning": "shopping bag",
+  "beg shopping": "shopping bag",
+  "fyp": "For You Page",
+  "f4f": "follow for follow",
+  "l4l": "like for like",
+  "pk battle": "PK battle",
+  "join battle": "join PK battle",
+};
+function expandTikTokSlang(text: string): string {
+  return text.replace(SLANG_RE, (m) => SLANG_MAP[m.toLowerCase().replace(/\s+/g, " ")] || m);
+}
+
+// ✅ Konteks TikTok Live Malaysia - inject bila slang dikesan
+const TIKTOK_MY_CONTEXT = "KONTEKS TIKTOK LIVE MALAYSIA: 'PC'/'Punch Card'/'Heart Me'/'hati oren'/'love oren' = gift hati oren (1 coin) yang penonton hantar sebagai TANDA KEHADIRAN & SOKONGAN kepada host, BUKAN kad fizikal atau loyalty card. Balas dengan terima kasih atas sokongan dan sapaan mesra. 'Tap screen' = tekan skrin untuk bagi like. 'Beg kuning' = shopping bag. 'PK battle' = pertandingan antara host.";
 
 const tts = new TtsEngine();
 let currentTtsVoice = "ms-MY-YasminNeural";
@@ -361,7 +388,6 @@ async function fetchMusic(q: string): Promise<string | null> {
   try {
     fs.mkdirSync(musicDir, { recursive: true });
 
-    // ✅ Snapshot folder SEBELUM download (kesan file baru dengan tepat)
     const before = new Map<string, number>();
     for (const fn of fs.readdirSync(musicDir)) {
       if (!fn.endsWith(".json")) before.set(fn, fs.statSync(path.join(musicDir, fn)).mtimeMs);
@@ -386,7 +412,6 @@ async function fetchMusic(q: string): Promise<string | null> {
     const { stdout } = await execFileAsync(ytdlp, args, { timeout: 12000 });
     console.log(`[MUSIC] ✅ yt-dlp done in ${((Date.now() - start) / 1000).toFixed(1)}s`);
 
-    // ✅ 1) Path TEPAT dari output yt-dlp (tak boleh silap lagu lagi)
     let filename = "";
     const lines = (stdout || "").trim().split(/\r?\n/).filter(Boolean);
     for (let i = lines.length - 1; i >= 0; i--) {
@@ -397,7 +422,6 @@ async function fetchMusic(q: string): Promise<string | null> {
       }
     }
 
-    // ✅ 2) Fallback: file baru/berubah dari snapshot
     if (!filename) {
       for (const fn of fs.readdirSync(musicDir)) {
         if (fn.endsWith(".json") || fn.endsWith(".part") || fn.endsWith(".ytdl")) continue;
@@ -548,7 +572,19 @@ async function processComment(username: string, text: string) {
     liveStats.comments++;
     io.emit(WS_EVENTS.COMMENT_LOG, { username, text });
 
-    const lower = text.toLowerCase().trim();
+    // ✅ Expand slang TikTok Malaysia sebelum AI proses
+    const expandedText = expandTikTokSlang(text);
+    if (expandedText !== text) {
+      console.log(`[SLANG] 🔄 "${text}" → "${expandedText}"`);
+    }
+    // ✅ CAPS = excitement penonton, bukan spam → normalize untuk AI
+    const aiText = (expandedText === expandedText.toUpperCase() && expandedText.length > 4)
+      ? expandedText.toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase())
+      : expandedText;
+    // ✅ Inject konteks TikTok MY bila slang dikesan
+    const aiInput = expandedText !== text ? `${TIKTOK_MY_CONTEXT}\nKomen penonton: ${aiText}` : aiText;
+
+    const lower = aiText.toLowerCase().trim();
     const skipPat = /^(skip|cancel|taknak|tak nak|next|stop lagu|batal|batal kan|next song|skip lagu)$/i;
     if (skipPat.test(lower) || lower.includes("skip") || lower.includes("cancel lagu")) {
       if (songPlaying || songQueue.length > 0) {
@@ -565,15 +601,15 @@ async function processComment(username: string, text: string) {
     const strongReq = /\b(mainkan|play|pasang|putar|nyanyi|request|req)\b/i;
     const softReq = /\b(minta|nak|bagi|boleh)\s+lagu\b/i;
     const directReq = /\blagu\s+[a-zA-Z0-9]/i;
-    const isReq = strongReq.test(text) || softReq.test(text) || directReq.test(text);
-    if (isReq) console.log(`[MUSIC] 🎯 Request pattern match: "${text}"`);
+    const isReq = strongReq.test(aiText) || softReq.test(aiText) || directReq.test(aiText);
+    if (isReq) console.log(`[MUSIC] 🎯 Request pattern match: "${aiText}"`);
     if (nowS - lastSong > 10000 && isReq) {
       lastSong = nowS;
       let q = "";
       try {
         const r = await routeAIRequest("SONG_EXTRACT", [
           { role: "system", content: "Ekstrak tajuk lagu daripada komen penonton. Jawab DENGAN tajuk lagu sahaja (serta artis jika disebut). Tiada ayat lain, tiada tanda petik. Jika TIADA tajuk lagu spesifik disebut, jawab tepat: NONE" },
-          { role: "user", content: text }]);
+          { role: "user", content: aiText }]);
         q = cleanSongTitle(r.content);
         console.log("[MUSIC] AI extracted:", JSON.stringify(q));
       } catch (e) {}
@@ -587,11 +623,11 @@ async function processComment(username: string, text: string) {
     }
 
     const simple = /^(haha+|hehe+|hihi+|lol|lmao|ok|okay|yes|no|ya|tak|yeap|yup|nice|good|best|mantap|power|ngam+)$/i;
-    if (simple.test(text.trim())) return;
+    if (simple.test(aiText.trim())) return;
     if (handledByMusic) return;
 
-    const commentLang = detectLang(text);
-    const { response, violations, approvalRequest } = await engine.handleComment(session.id, username, text);
+    const commentLang = detectLang(aiText);
+    const { response, violations, approvalRequest } = await engine.handleComment(session.id, username, aiInput);
     for (const v of violations) io.emit(WS_EVENTS.POLICY_VIOLATION, v);
     if (approvalRequest) io.emit(WS_EVENTS.APPROVAL_REQUEST, approvalRequest);
 
@@ -603,7 +639,7 @@ async function processComment(username: string, text: string) {
           try {
             const r = await routeAIRequest("CHITCHAT", [
               { role: "system", content: "You are a friendly Malaysian TikTok Live host. Reply in NATURAL ENGLISH ONLY. 1-2 short sentences. No Malay words. No emoji, no markdown." },
-              { role: "user", content: text }]);
+              { role: "user", content: aiText }]);
             clean = r.content;
           } catch (e) {}
         }
