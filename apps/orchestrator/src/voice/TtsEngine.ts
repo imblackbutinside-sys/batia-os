@@ -1,6 +1,68 @@
 ﻿import path from "path";
 import fs from "fs";
 
+// ✅ Normalize Unicode fancy text (𝓢𝔂𝓪𝓮𝓭𝓸𝓻𝓪 → Syaedora)
+const FANCY_RANGES: Array<[number, number, number]> = [
+  // Bold, Italic, BoldItalic, Script, BoldScript, Fraktur, BoldFraktur,
+  // DoubleStruck, SansSerif, SansBold, SansItalic, SansBoldItalic, Mono
+  [0x1D400, 0x1D419, 65],   // Bold A-Z
+  [0x1D41A, 0x1D433, 97],   // Bold a-z
+  [0x1D434, 0x1D44D, 65],   // Italic A-Z
+  [0x1D44E, 0x1D467, 97],   // Italic a-z
+  [0x1D468, 0x1D481, 65],   // Bold Italic A-Z
+  [0x1D482, 0x1D49B, 97],   // Bold Italic a-z
+  [0x1D49C, 0x1D4B5, 65],   // Script A-Z
+  [0x1D4B6, 0x1D4CF, 97],   // Script a-z
+  [0x1D4D0, 0x1D4E9, 65],   // Bold Script A-Z
+  [0x1D4EA, 0x1D503, 97],   // Bold Script a-z
+  [0x1D504, 0x1D51D, 65],   // Fraktur A-Z
+  [0x1D51E, 0x1D537, 97],   // Fraktur a-z
+  [0x1D538, 0x1D551, 65],   // Double-struck A-Z
+  [0x1D552, 0x1D56B, 97],   // Double-struck a-z
+  [0x1D56C, 0x1D585, 65],   // Bold Fraktur A-Z
+  [0x1D586, 0x1D59F, 97],   // Bold Fraktur a-z
+  [0x1D5A0, 0x1D5B9, 65],   // Sans A-Z
+  [0x1D5BA, 0x1D5D3, 97],   // Sans a-z
+  [0x1D5D4, 0x1D5ED, 65],   // Sans Bold A-Z
+  [0x1D5EE, 0x1D607, 97],   // Sans Bold a-z
+  [0x1D608, 0x1D621, 65],   // Sans Italic A-Z
+  [0x1D622, 0x1D63B, 97],   // Sans Italic a-z
+  [0x1D63C, 0x1D655, 65],   // Sans Bold Italic A-Z
+  [0x1D656, 0x1D66F, 97],   // Sans Bold Italic a-z
+  [0x1D670, 0x1D689, 65],   // Mono A-Z
+  [0x1D68A, 0x1D6A3, 97],   // Mono a-z
+  // Bold digits 0-9
+  [0x1D7CE, 0x1D7D7, 48],
+  [0x1D7D8, 0x1D7E1, 48],
+  [0x1D7E2, 0x1D7EB, 48],
+  [0x1D7EC, 0x1D7F5, 48],
+  [0x1D7F6, 0x1D7FF, 48],
+];
+
+function normalizeFancyUnicode(text: string): string {
+  let out = "";
+  for (const ch of text) {
+    const cp = ch.codePointAt(0) || 0;
+    let mapped = false;
+    for (const [start, end, base] of FANCY_RANGES) {
+      if (cp >= start && cp <= end) {
+        out += String.fromCharCode(base + (cp - start));
+        mapped = true;
+        break;
+      }
+    }
+    if (!mapped) out += ch;
+  }
+  // Fullwidth A-Z, a-z, 0-9
+  out = out.replace(/[\uFF21-\uFF3A]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFF21 + 65));
+  out = out.replace(/[\uFF41-\uFF5A]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFF41 + 97));
+  out = out.replace(/[\uFF10-\uFF19]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFF10 + 48));
+  // Circled, parenthesized letters etc
+  out = out.replace(/[\u24B6-\u24CF]/g, c => String.fromCharCode(c.charCodeAt(0) - 0x24B6 + 65));
+  out = out.replace(/[\u24D0-\u24E9]/g, c => String.fromCharCode(c.charCodeAt(0) - 0x24D0 + 97));
+  return out;
+}
+
 const CASUAL_MAP: Array<[RegExp, string]> = [
   [/\btidak ada\b/gi, "takde"],
   [/\btiada\b/gi, "takde"],
@@ -32,7 +94,6 @@ const USERNAME_FIX: Array<[RegExp, string]> = [
   [/\s+/g, " "],
 ];
 
-// ✅ Tanpa test→tes dan user→yuser (username natural)
 const USERNAME_PRONUNCIATION: Array<[RegExp, string]> = [
   [/\babam\b/gi, "Abang"],
   [/\bjoin\b/gi, "join"],
@@ -42,8 +103,33 @@ const USERNAME_PRONUNCIATION: Array<[RegExp, string]> = [
   [/\bsis\b/gi, "sis"],
 ];
 
-// ✅ Map fonetik untuk rojak Melayu SAHAJA
 const PRONUNCIATION_FIX: Array<[RegExp, string]> = [
+  // ✅ TikTok gift names — sebutan English yang betul dalam Malay TTS
+  [/\bRose\b/g, "ros"],
+  [/\brose\b/g, "ros"],
+  [/\bRoses\b/g, "ros"],
+  [/\broses\b/g, "ros"],
+  [/\bLion\b/g, "laion"],
+  [/\blion\b/g, "laion"],
+  [/\bGalaxy\b/g, "geleksi"],
+  [/\bgalaxy\b/g, "geleksi"],
+  [/\bHeart Me\b/gi, "hart mi"],
+  [/\bHeart\b/g, "hart"],
+  [/\bheart\b/g, "hart"],
+  [/\bEncore\b/gi, "enkor"],
+  [/\bPunch Card\b/gi, "panch kad"],
+  [/\bClap Clap\b/gi, "klep klep"],
+  [/\bClap\b/g, "klep"],
+  [/\bclap\b/g, "klep"],
+  [/\bGift\b/g, "gif"],
+  [/\bgift\b/g, "gif"],
+  [/\bGifts\b/g, "gifs"],
+  [/\bgifts\b/g, "gifs"],
+  [/\bFlower\b/gi, "flauer"],
+  [/\bSunshine\b/gi, "sansyain"],
+  [/\bDrama Queen\b/gi, "drama kuin"],
+  [/\bTicket\b/gi, "tiket"],
+  // General words
   [/\bMalaysia\b/gi, "Mah-lay-see-ah"],
   [/\bMalaysian\b/gi, "Mah-lay-see-an"],
   [/\bTikTok\b/gi, "Tick Tock"],
@@ -72,10 +158,24 @@ const PRONUNCIATION_FIX: Array<[RegExp, string]> = [
   [/\bbest\b/gi, "bes"],
   [/\bqueue\b/gi, "kiu"],
   [/\bqueues\b/gi, "kiu"],
+  [/\bappreciate\b/gi, "eprisieit"],
+  [/\bfire\b/gi, "faier"],
+  [/\bcool\b/gi, "kul"],
+  [/\bawesome\b/gi, "osom"],
+  [/\bamazing\b/gi, "emeizig"],
+  [/\bviewer\b/gi, "viuer"],
+  [/\bviewers\b/gi, "viuers"],
+  [/\bhost\b/gi, "hos"],
+  [/\bsubscribe\b/gi, "sabskraib"],
+  [/\bupdate\b/gi, "apdet"],
+  [/\bonline\b/gi, "onlain"],
+  [/\boffline\b/gi, "oflain"],
 ];
 
 function casualizeMs(text: string): string {
   let out = text;
+  // ✅ Normalize fancy unicode DULU sebelum apa-apa
+  out = normalizeFancyUnicode(out);
   for (const [re, rep] of USERNAME_FIX) out = out.replace(re, rep);
   for (const [re, rep] of CASUAL_MAP) out = out.replace(re, rep);
   for (const [re, rep] of PRONUNCIATION_FIX) out = out.replace(re, rep);
@@ -83,22 +183,22 @@ function casualizeMs(text: string): string {
   return out.replace(/\s+/g, " ").trim();
 }
 
-// ✅ EN: minimal - username fix + TikTok fix sahaja
 function casualizeEn(text: string): string {
   let out = text;
+  out = normalizeFancyUnicode(out);
   for (const [re, rep] of USERNAME_FIX) out = out.replace(re, rep);
   out = out.replace(/\bTikTok\b/gi, "Tik Tok");
   out = out.replace(/\bMalaysia\b/gi, "Malaysia");
   return out.replace(/\s+/g, " ").trim();
 }
 
+// ✅ Language detection: BM dulu → EN → default BM (sama macam AIRouter)
+const MS_RE_TTS = /\b(tak|takde|xde|nak|nk|kat|dah|dh|boleh|ble|berapa|pukul|harga|stok|korang|korg|kita|aku|sy|saya|awak|awk|kau|ko|jom|sebab|kenapa|nape|macam|mcm|betul|cantik|murah|mahal|beli|malam|mlm|esok|tadi|selalu|bila|mana|mane|apa|ape|siapa|sape|assalamualaikum|waalaikumussalam|khabar|santai|borak|kongsi|cerita|sokong|tengok|tgk|jumpa|sayang|syg|weh|wei|woi|bang|abang|kak|kakak|adik|hos|lagu|lg|nyanyi|dengar|dgr|tau|tahu|ajar|nanti|nnti|nti|hati|jiwa|cinta|rindu|dalam|dlm|pak|mak|la|lah|kan|ek|eh|nye|dia|die|orang|org|buat|bagi|bg|minta|tolong|sila|salah|takpe|je|jer|pun|pn|ni|nih|tu|tuh|ini|itu|dan|atau|untuk|utk|dengan|dgn|yang|yg|pada|kalau|kalo|sudah|sdh|akan|akn|sini|situ|sana|habis|banyak|sikit|skt|besar|kecil|comel|lawak|lucu|gila|gile|sangat|sgt|amat|paling|benar|tipu|jujur|serius|srs|gurau|main|pasang|putar|mantap|ngam|syok|kena|kne|hari|ari|member|geng|abam|terima|kasih|memang)\b/i;
+const EN_RE_TTS = /\b(the|you|your|you're|are|is|was|were|am|im|i'm|it's|its|this|that|these|those|what|when|where|which|who|why|how|please|thanks|thank|sorry|hello|good|great|nice|cool|love|want|need|can|could|will|would|should|have|has|had|do|does|did|not|don't|cant|can't|won't|yes|maybe|really|very|too|also|and|but|because|if|then|than|about|with|from|for|my|me|mine|our|their|he|she|him|her|them|they|we|us|let|lets|here|there|now|today|tonight|tomorrow|friend|friends|song|music|sing|play|watch|help|know|think|sure|fine|well|better|awesome|amazing|beautiful|wonderful|funny|laugh|laughing|enjoy|miss|wait|come|go|get|make|take|give|send|buy|sell|pay|price|money|coin|coins|gift|gifts|follow|share|stream|live|host)\b/i;
 function detectLang(text: string): "MS" | "EN" {
-  const normalized = text.replace(/_/g, " ");
-  const hasGreeting = /(^|\s)(salam|hai|hye|hey|assalam|waalaikum|selamat|jumpa|welkam|welcome)/i.test(normalized);
-  const ms = (normalized.match(/\b(tak|takde|nak|je|jom|korang|apa|macam|mana|kenapa|dah|ni|tu|kat|kita|saya|awak|aku|kamu|boleh|khabar|assalamualaikum|waalaikumussalam|santai|borak|cerita|harga|stok|beli|cantik|bang|kak|abang|malam|hari|esok|best|syok|memang|betul|kan|dengan|untuk|yang|dan|sila|maaf|lah|wei|woi|geng|member|lepak|tq|ok|oke|okay|weh)\b/gi) || []).length;
-  const words = Math.max(1, normalized.trim().split(/\s+/).length);
-  if (hasGreeting) return "MS";
-  return (ms / words >= 0.2 || ms >= 1) ? "MS" : "EN";
+  if (MS_RE_TTS.test(text)) return "MS";
+  if (EN_RE_TTS.test(text)) return "EN";
+  return "MS";
 }
 
 export class TtsEngine {
