@@ -41,7 +41,6 @@ export default function Dashboard() {
   const currentQRef = useRef("");
   const videoRef = useRef<HTMLVideoElement>(null);
 
-  // ✅ AUTO-CLAIM SPEAKER bila page buka
   useEffect(() => {
     socket.on(WS_EVENTS.AUDIO_ROUTE, (d: any) => setSpeaker(d.label));
     const label = /Mobi|Android/i.test(navigator.userAgent) ? "PHONE" : "LAPTOP";
@@ -95,7 +94,6 @@ export default function Dashboard() {
   const audioQueue = useRef<string[]>([]);
   const playing = useRef(false);
 
-  // ✅ AI AUDIO: paksa URL ke port 4000 + log error
   const playNext = () => {
     if (playing.current) return;
     const raw = audioQueue.current.shift();
@@ -110,7 +108,6 @@ export default function Dashboard() {
   };
 
   useEffect(() => {
-    // ✅ Lepas backend restart, browser report balik lagu tengah main
     socket.on("connect", () => {
       const a = musicAudio.current;
       if (a && !a.paused && !a.ended && currentQRef.current) {
@@ -145,7 +142,12 @@ export default function Dashboard() {
         setMusicPaused(false);
       }
       if (d.state === "PAUSED") { if (musicAudio.current) musicAudio.current.pause(); setMusicPaused(true); }
-      if (d.state === "RESUMED") { if (musicAudio.current) musicAudio.current.play().catch(() => {}); setMusicPaused(false); }
+      // ✅ FIX: force state back ke PLAYING supaya pause button work kali kedua
+      if (d.state === "RESUMED") { 
+        if (musicAudio.current) musicAudio.current.play().catch(() => {}); 
+        setMusicPaused(false);
+        setMusic((prev: any) => ({ ...prev, state: "PLAYING" }));
+      }
       if (d.state === "VOLUME") { setMusicVolume(d.vol); musicVolumeRef.current = d.vol; }
     });
     socket.on("music:duck", () => {

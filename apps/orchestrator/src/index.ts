@@ -22,7 +22,7 @@ const policyPath = path.resolve(__dirname, "../../../policies/tiktok_my_2026.yam
 const engine = new LiveContextEngine(new PolicyEngine(policyPath));
 
 console.log("[EVENTS] WS_EVENTS =", JSON.stringify(WS_EVENTS));
-console.log("[BUILD] BATIA v8.7 - PC/Heart Me = gift sokongan (context betul)");
+console.log("[BUILD] BATIA v8.16 - fast AI timeout + latency log");
 
 try {
   const audioDir = path.join(process.cwd(), "audio");
@@ -89,7 +89,6 @@ function cleanSongTitle(q: string): string {
     .replace(/\s*feat\.?\s+.+$/i, "").replace(/\s*-\s*.*$/, "").replace(/\s+/g, " ").trim();
 }
 
-// ✅ Dictionary TikTok Malaysia - single-pass (tak bertindih)
 const SLANG_RE = /\b(punch\s*card|pc|heart\s*me|heartme|hati\s*oren|love\s*oren|tap\s*tap\s*love|tap\s*skrin|tap\s*screen|beg\s*kuning|beg\s*shopping|fyp|f4f|l4l|pk\s*battle|join\s*battle)\b/gi;
 const SLANG_MAP: Record<string, string> = {
   "punch card": "gift Heart Me (tanda kehadiran dan sokongan untuk host)",
@@ -113,7 +112,6 @@ function expandTikTokSlang(text: string): string {
   return text.replace(SLANG_RE, (m) => SLANG_MAP[m.toLowerCase().replace(/\s+/g, " ")] || m);
 }
 
-// ✅ Konteks TikTok Live Malaysia - inject bila slang dikesan
 const TIKTOK_MY_CONTEXT = "KONTEKS TIKTOK LIVE MALAYSIA: 'PC'/'Punch Card'/'Heart Me'/'hati oren'/'love oren' = gift hati oren (1 coin) yang penonton hantar sebagai TANDA KEHADIRAN & SOKONGAN kepada host, BUKAN kad fizikal atau loyalty card. Balas dengan terima kasih atas sokongan dan sapaan mesra. 'Tap screen' = tekan skrin untuk bagi like. 'Beg kuning' = shopping bag. 'PK battle' = pertandingan antara host.";
 
 const tts = new TtsEngine();
@@ -561,6 +559,7 @@ function sanitizeForRegularMode(text: string): string {
 
 async function processComment(username: string, text: string) {
   console.log(`[DEBUG processComment] DITERIMA: username="${username}", text="${text}"`);
+  const t0 = Date.now();
   if (!isValidUsername(username)) { console.log(`[DEBUG] DITOLAK: username tidak sah`); return; }
   const now = Date.now();
   if (lastCommentTime[username] && now - lastCommentTime[username] < 500) { console.log(`[DEBUG] DITOLAK: Spam`); return; }
@@ -572,16 +571,13 @@ async function processComment(username: string, text: string) {
     liveStats.comments++;
     io.emit(WS_EVENTS.COMMENT_LOG, { username, text });
 
-    // ✅ Expand slang TikTok Malaysia sebelum AI proses
     const expandedText = expandTikTokSlang(text);
     if (expandedText !== text) {
       console.log(`[SLANG] 🔄 "${text}" → "${expandedText}"`);
     }
-    // ✅ CAPS = excitement penonton, bukan spam → normalize untuk AI
     const aiText = (expandedText === expandedText.toUpperCase() && expandedText.length > 4)
       ? expandedText.toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase())
       : expandedText;
-    // ✅ Inject konteks TikTok MY bila slang dikesan
     const aiInput = expandedText !== text ? `${TIKTOK_MY_CONTEXT}\nKomen penonton: ${aiText}` : aiText;
 
     const lower = aiText.toLowerCase().trim();
@@ -649,6 +645,7 @@ async function processComment(username: string, text: string) {
       if (currentMode === "SHOPPABLE" && scriptQueue.running) scriptQueue.addResponse(clean, username + ": " + text);
       else {
         const audioUrl = await speakMixed(clean, commentLang);
+        console.log(`[LATENCY] ${Date.now() - t0}ms dari komen ke response`);
         if (audioUrl) emitResponse({ type: "COMMENT_RESPONSE", content: clean, targetUser: username, audioUrl });
       }
     }
@@ -767,8 +764,18 @@ io.on("connection", (socket) => {
     if (songQueue.length > 0) setTimeout(() => void playNextInQueue(), 500);
     else console.log("[MUSIC] Stop: queue kosong, tak auto-play");
   });
-  socket.on("music:pause", () => io.emit("music:status", { state: "PAUSED" }));
-  socket.on("music:resume", () => io.emit("music:status", { state: "RESUMED" }));
+  socket.on("music:pause", () => {
+    console.log("[MUSIC] ⏸️ Pause received");
+    songPlaying = false;
+    io.emit("music:status", { state: "PAUSED" });
+  });
+  socket.on("music:resume", () => {
+    console.log("[MUSIC] ▶️ Resume received");
+    if (currentMusicFile && fs.existsSync(currentMusicFile)) {
+      songPlaying = true;
+      io.emit("music:status", { state: "RESUMED" });
+    }
+  });
   socket.on("music:volume", (d: any) => { musicVolume = Math.max(0, Math.min(1, Number(d.vol) || 1)); io.emit("music:status", { state: "VOLUME", vol: musicVolume }); });
   socket.on("music:duck", () => io.emit("music:volume", { vol: 0.3 }));
   socket.on("music:unduck", () => io.emit("music:volume", { vol: musicVolume }));
