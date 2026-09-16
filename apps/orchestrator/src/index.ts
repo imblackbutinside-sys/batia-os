@@ -22,7 +22,7 @@ const policyPath = path.resolve(__dirname, "../../../policies/tiktok_my_2026.yam
 const engine = new LiveContextEngine(new PolicyEngine(policyPath));
 
 console.log("[EVENTS] WS_EVENTS =", JSON.stringify(WS_EVENTS));
-console.log("[BUILD] BATIA v8.16 - fast AI timeout + latency log");
+console.log("[BUILD] BATIA v8.18b - grace timer start before connect");
 
 try {
   const audioDir = path.join(process.cwd(), "audio");
@@ -214,6 +214,9 @@ let pitchIdx = 0;
 let lastPitch = Date.now() - 200000;
 let lastGreet = 0;
 const lastCommentTime: Record<string, number> = {};
+// ✅ Grace period untuk discard backlog TikTok lepas reconnect
+let tiktokConnectTime = 0;
+const BACKLOG_GRACE_MS = 8000;
 
 let autoTapEnabled = false;
 let autoTapInterval: NodeJS.Timeout | null = null;
@@ -543,6 +546,7 @@ function isValidSongTitle(t: string): boolean {
   const l = t.toLowerCase().trim();
   if (/\b(tak tau|x tau|tau apa|apa tah|random|kot|entah|mana|tak pasti|confuse|buntu)\b/i.test(l)) return false;
   if (/\b(nak|boleh|tolong|sila|please|bagi|minta|request|req|mahu|hendak|nak minta)\b/i.test(l)) return false;
+  if (/\b(tadi|semalam|malam|pagi|petang|best|sedap|syok|mantap|slow|laju)\b/i.test(l)) return false;
   const w = l.split(/\s+/).filter(x => x.length > 0);
   if (w.length === 1 && /^(apa|mana|bila|siapa|kenapa|macam|bagaimana|ya|tak|ok)$/i.test(w[0])) return false;
   return true;
@@ -566,6 +570,11 @@ async function processComment(username: string, text: string) {
   lastCommentTime[username] = now;
   try {
     if (isDuplicateComment(username, text)) { console.log(`[DEBUG] DITOLAK: Duplicate`); return; }
+    // ✅ Discard backlog TikTok lepas reconnect
+    if (tiktokConnectTime && now - tiktokConnectTime < BACKLOG_GRACE_MS) {
+      console.log(`[BACKLOG] ⏭️ Discard komen lama (${username}): "${text.slice(0, 40)}"`);
+      return;
+    }
     const session = await ensureSession();
     commentTimes.push(Date.now());
     liveStats.comments++;
@@ -609,6 +618,16 @@ async function processComment(username: string, text: string) {
         q = cleanSongTitle(r.content);
         console.log("[MUSIC] AI extracted:", JSON.stringify(q));
       } catch (e) {}
+      if (!q || q === "NONE") {
+        const mRule = aiText.match(/\blagu\s+([a-zA-Z0-9][a-zA-Z0-9\s'&.-]{2,})/i);
+        if (mRule) {
+          const cand = cleanSongTitle(mRule[1]);
+          if (cand && isValidSongTitle(cand)) {
+            q = cand;
+            console.log("[MUSIC] 📏 Rule fallback extracted:", JSON.stringify(q));
+          }
+        }
+      }
       if (q && q !== "NONE" && q.length >= 2 && isValidSongTitle(q)) {
         handledByMusic = true;
         enqueueSong(q, username);
@@ -654,6 +673,11 @@ async function processComment(username: string, text: string) {
 
 async function processGift(username: string, giftName: string, giftValue: number) {
   try {
+    // ✅ Discard gift backlog lepas reconnect
+    if (tiktokConnectTime && Date.now() - tiktokConnectTime < BACKLOG_GRACE_MS) {
+      console.log(`[BACKLOG] ⏭️ Discard gift lama (${username}): ${giftName}`);
+      return;
+    }
     const session = await ensureSession();
     liveStats.gifts++;
     let reaction = await engine.handleGift(session.id, username, giftName, giftValue);
@@ -694,6 +718,8 @@ io.on("connection", (socket) => {
   socket.on(WS_EVENTS.TIKTOK_CONNECT, (data: { username: string }) => {
     io.emit(WS_EVENTS.TIKTOK_STATUS, { status: "CONNECTING..." });
     try {
+      // ✅ v8.18b: grace mula SEBELUM connect (backlog masuk masa connecting lagi)
+      tiktokConnectTime = Date.now();
       tiktok.connect(data.username, {
         onComment: processComment,
         onGift: processGift,
@@ -710,7 +736,13 @@ io.on("connection", (socket) => {
         tries++;
         if (tiktok.connected) {
           clearInterval(poll);
-          console.log("[TikTok] status -> CONNECTED (poll)");
+          tiktokConnectTime = Date.now();
+          songQueue = [];
+          songPlaying = false;
+          currentlyPlayingQ = "";
+          emitSongQueue();
+          io.emit("music:status", { state: "STOPPED" });
+          console.log("[TikTok] CONNECTED | backlog grace 8s + music queue cleared");
           io.emit(WS_EVENTS.TIKTOK_STATUS, { status: "CONNECTED" });
         } else if (tries > 30) {
           clearInterval(poll);

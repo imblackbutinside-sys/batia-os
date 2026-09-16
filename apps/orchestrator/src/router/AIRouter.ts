@@ -103,11 +103,12 @@ export async function routeAIRequest(task: TaskType, messages: any[]) {
     return { content: demoContent(task, messages), providerUsed: "DEMO", modelUsed: "demo", latencyMs: 0 };
   }
 
+  // ✅ v8.17: compound-mini SENTIASA dicuba dulu + working model sebagai kedua (max 2 model)
   const fastModels = route.provider.name === "Groq"
-    ? [...new Set([workingGroqModel || providers.groq.models[0], providers.groq.models[1]])]
+    ? [...new Set([providers.groq.models[0], workingGroqModel, providers.groq.models[1]].filter(Boolean) as string[])].slice(0, 2)
     : route.provider.models;
 
-  const timeoutMs = task === "COMMENT_CLASSIFY" ? 1500 : 2500;
+  const timeoutMs = task === "COMMENT_CLASSIFY" ? 1500 : task === "SONG_EXTRACT" ? 1800 : 2500;
   for (const model of fastModels) {
     try {
       const r = await callProvider(route.provider, model, messages, route.temperature, route.maxTokens, timeoutMs);

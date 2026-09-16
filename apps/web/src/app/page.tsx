@@ -109,6 +109,9 @@ export default function Dashboard() {
 
   useEffect(() => {
     socket.on("connect", () => {
+      // ✅ v8.18: clear audio queue lama bila reconnect (elak baca balik response lama)
+      audioQueue.current = [];
+      playing.current = false;
       const a = musicAudio.current;
       if (a && !a.paused && !a.ended && currentQRef.current) {
         console.log("[MUSIC-WEB] sync playing:", currentQRef.current);
@@ -142,9 +145,8 @@ export default function Dashboard() {
         setMusicPaused(false);
       }
       if (d.state === "PAUSED") { if (musicAudio.current) musicAudio.current.pause(); setMusicPaused(true); }
-      // ✅ FIX: force state back ke PLAYING supaya pause button work kali kedua
-      if (d.state === "RESUMED") { 
-        if (musicAudio.current) musicAudio.current.play().catch(() => {}); 
+      if (d.state === "RESUMED") {
+        if (musicAudio.current) musicAudio.current.play().catch(() => {});
         setMusicPaused(false);
         setMusic((prev: any) => ({ ...prev, state: "PLAYING" }));
       }
@@ -257,7 +259,7 @@ export default function Dashboard() {
       {mode === "SHOPPABLE" && (
         <div className="mb-6 grid grid-cols-2 gap-6">
           <div className="bg-gray-900 rounded p-4">
-            <h2 className="font-semibold mb-3">👨‍ Product Details</h2>
+            <h2 className="font-semibold mb-3">👨 Product Details</h2>
             <label className="text-xs text-gray-400">Product Description</label>
             <textarea value={prodDesc} onChange={(e) => { setProdDesc(e.target.value); setProdConfigured(false); }} className="w-full bg-gray-800 rounded px-3 py-2 text-sm h-20 mb-3" />
             <label className="text-xs text-gray-400">Selling Points & Promotions (satu per baris)</label>
