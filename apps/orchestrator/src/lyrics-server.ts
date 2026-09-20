@@ -1,5 +1,5 @@
-// ✅ BATIA Lyrics Server v8.44 - port 4002
-// Smart LRCLIB: get endpoint (exact) + duration validation + auto parse Artist-Title
+// ✅ BATIA Lyrics Server v8.49 - port 4002
+// Fast path + Whisper Malay prompt + post-correction + loose LRCLIB match
 import http from "http";
 import path from "path";
 import fs from "fs";
@@ -10,7 +10,7 @@ import { Server as SocketServer } from "socket.io";
 import dotenv from "dotenv";
 const execFileAsync = promisify(execFile);
 
-const SERVER_VERSION = "8.44";
+const SERVER_VERSION = "8.49";
 
 const __dirname = path.dirname(new URL(import.meta.url).pathname).replace(/^\/([A-Z]:)/, "$1");
 dotenv.config({ path: path.resolve(__dirname, "../.env") });
@@ -28,6 +28,7 @@ const cookiesPath = path.join(toolsDir, "cookies.txt");
 
 type Word = { w: string; a: number; b: number };
 type Line = { a: number; b: number; text: string; words: Word[] };
+type VideoMeta = { title: string; channel: string; duration: number };
 type SongState = {
   title: string;
   videoId: string;
@@ -37,6 +38,7 @@ type SongState = {
   hasLyrics: boolean;
   loading: boolean;
   offsetMs: number;
+  leadIn: number;
   source: string;
   lang: string;
   frontendElapsed?: number;
@@ -45,7 +47,7 @@ type SongState = {
 
 let current: SongState | null = null;
 
-console.log("[LYRICS] 🎤 Lyrics server v" + SERVER_VERSION + " - port", LYRICS_PORT, "| smart LRCLIB");
+console.log("[LYRICS] 🎤 Lyrics server v" + SERVER_VERSION + " - port", LYRICS_PORT, "| Malay prompt + corrections");
 console.log("[LYRICS] Lyrics cache:", lyricsDir);
 
 function isWeirdScript(t: string): boolean {
@@ -70,6 +72,7 @@ function isBadLine(t: string): boolean {
 
 function isInsufficientLyrics(lines: Line[]): boolean {
   if (lines.length < 5) return true;
+  if (lines.length === 0) return true;
   const lastB = Math.max(...lines.map((l) => l.b));
   if (lastB < 60000 && lines.length < 15) return true;
   return false;
@@ -79,7 +82,7 @@ function cleanLine(t: string): string {
   return t.replace(/<[^>]+>/g, "").replace(/[♪♫]/g, "").replace(/\s+/g, " ").trim();
 }
 
-const MS_WORDS_RE = /\b(yang|dan|aku|kau|kamu|dia|mereka|kita|kami|saya|tak|tiada|bukan|ini|itu|hati|cinta|jiwa|rindu|sayang|kasih|malam|hari|bulan|bintang|mimpi|nyata|abadi|sejati|kejora|purnama|senja|embun|bayu|melur|kenanga|cempaka|seroja|nilam|baiduri|permata|delima|ratna|gita|nada|irama|dendang|seruling|zapin|inang|joget|selendang|songket|keris|wau|kenangan|hujan|pagi|petang|selalu|bila|kenapa|mengapa|bagaimana|semoga|hingga|sampai|kembali|pergi|tinggal|ingat|lupa|antara|dalam|pada|untuk|dengan|telah|sudah|belum|masih|akan|jangan|pernah|hanya|saja|sahaja|juga|pun|lah|nya|dari|oleh|kerana|karena|sebab|agar|supaya|walau|walaupun|meski|meskipun|jika|kalau|tuan|puan|abang|kakak|adik|teman|kawan|sahabat|cintaku|cintamu|sayangku|hatiku|jiwaku|diriku|dirimu|pulang|kampung|angin|api|air|tanah|langit|bumi|peluk|cium|airmata|menangis|tersenyum|berjalan|berlari|terbang|jatuh|bangkit|hidup|mati|syurga|tuhan|doa|restu|ibu|bapa|emak|ayah|ananda|putera|puteri|raja|permaisuri|merdeka|tanahair|bangsa|negaraku|selamat|terima|mohon|ampun|maaf|syukur|alhamdulillah|assalamualaikum|waalaikumussalam|sinaran|matamu|bak|kedamaian|halusnya|lenganmu|sehalus|sutera|cina|melembutkan|setiap|kata|harum|kasturi|rambutmu|ingin|ku|belai|bertambah|indah|keperibadianmu|bicara|menyegarkan|semangat|daku|berada|di|sampingku|semuanya|menjadi|keindahan|hidupku)\b/gi;
+const MS_WORDS_RE = /\b(yang|dan|aku|kau|kamu|dia|mereka|kita|kami|saya|tak|tiada|bukan|ini|itu|hati|cinta|jiwa|rindu|sayang|kasih|malam|hari|bulan|bintang|mimpi|nyata|abadi|sejati|kejora|purnama|senja|embun|bayu|melur|kenanga|cempaka|seroja|nilam|baiduri|permata|delima|ratna|gita|nada|irama|dendang|seruling|zapin|inang|joget|selendang|songket|keris|wau|kenangan|hujan|pagi|petang|selalu|bila|kenapa|mengapa|bagaimana|semoga|hingga|sampai|kembali|pergi|tinggal|ingat|lupa|antara|dalam|pada|untuk|dengan|telah|sudah|belum|masih|akan|jangan|pernah|hanya|saja|sahaja|juga|pun|lah|nya|dari|oleh|kerana|karena|sebab|agar|supaya|walau|walaupun|meski|meskipun|jika|kalau|tuan|puan|abang|kakak|adik|teman|kawan|sahabat|cintaku|cintamu|sayangku|hatiku|jiwaku|diriku|dirimu|pulang|kampung|angin|api|air|tanah|langit|bumi|peluk|cium|airmata|menangis|tersenyum|berjalan|berlari|terbang|jatuh|bangkit|hidup|mati|syurga|tuhan|doa|restu|ibu|bapa|emak|ayah|ananda|putera|puteri|raja|permaisuri|merdeka|tanahair|bangsa|negaraku|selamat|terima|mohon|ampun|maaf|syukur|alhamdulillah|assalamualaikum|waalaikumussalam|sinaran|matamu|bak|kedamaian|halusnya|lenganmu|sehalus|sutera|cina|melembutkan|setiap|kata|harum|kasturi|rambutmu|ingin|ku|belai|bertambah|indah|keperibadianmu|bicara|menyegarkan|semangat|daku|berada|di|sampingku|semuanya|menjadi|keindahan|hidupku|lumrah|mudah|muda|percaya|bersama|kerana)\b/gi;
 const EN_WORDS_RE = /\b(the|and|you|your|yours|my|me|mine|we|us|our|they|them|their|he|she|him|her|is|are|was|were|been|being|have|has|had|do|does|did|will|would|can|could|should|may|might|must|shall|of|in|on|at|to|from|for|with|without|about|into|over|under|again|then|than|so|such|not|only|own|same|too|very|just|because|until|while|although|though|if|else|when|where|why|how|all|any|both|each|few|more|most|other|some|love|heart|eyes|night|day|dream|forever|always|never|together|away|back|home|life|world|sky|rain|sun|moon|star|remember|forget|stay|leave|hold|touch|feel|know|think|believe|hope|wish|wait|keep|give|take|make|break|fall|fly|run|walk|sing|dance|smile|cry|tears|kiss|warm|cold|bright|dark|light|shadow|silence|sound|voice|song|melody|music|beautiful|wonderful|amazing|broken|lost|found|free|wild|young|old|true|real|right|wrong|good|bad|better|best|worst|first|last|once|twice|every|another|enough|less|least|much|many|little|big|small|great|high|low|deep|wide|long|short|hard|soft|sweet|bitter|strong|weak|brave|afraid|scared|lonely|alone|happy|sad|glad|angry|calm|quiet|loud|slow|fast|quick|early|late|now|here|there|everywhere|nowhere|somewhere|anywhere|someone|somebody|anyone|anybody|everyone|everybody|nobody|nothing|something|anything|everything)\b/gi;
 
 function textLang(text: string): "ms" | "en" | "?" {
@@ -89,6 +92,13 @@ function textLang(text: string): "ms" | "en" | "?" {
   if (ms > en) return "ms";
   if (en > ms) return "en";
   return "?";
+}
+
+function filterLinesByLang(lines: Line[], lang: "ms" | "en"): Line[] {
+  return lines.filter((l) => {
+    const ll = textLang(l.text);
+    return ll === lang || ll === "?";
+  });
 }
 
 function addWords(l: Line) {
@@ -106,19 +116,87 @@ function normT(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
 }
 
-function saveCache(videoId: string, lines: Line[], offsetMs: number, source: string, lang: string) {
-  try { fs.writeFileSync(path.join(lyricsDir, videoId + ".json"), JSON.stringify({ v: 1, offsetMs, source, lang, lines })); } catch (e) {}
+// ✅ v8.49: post-correction dictionary untuk Whisper Melayu
+const MS_CORRECTIONS: [RegExp, string][] = [
+  [/\bjumrah\b/gi, "lumrah"],
+  [/\bjumrah dunia\b/gi, "lumrah dunia"],
+  [/\bmuda\b(?=\s*[.,!?;:]|\s*$)/gi, "mudah"],
+  [/\bdi mana\b/gi, "dimana"],
+  [/\bke mana\b/gi, "kemana"],
+  [/\bdi situ\b/gi, "disitu"],
+  [/\bke situ\b/gi, "kesitu"],
+  [/\bdi sana\b/gi, "disana"],
+  [/\bke sana\b/gi, "kesana"],
+  [/\bdi sini\b/gi, "disini"],
+  [/\bke sini\b/gi, "kesini"],
+  [/\bkuasa mu\b/gi, "kuasamu"],
+  [/\bhati mu\b/gi, "hatimu"],
+  [/\bdiri mu\b/gi, "dirimu"],
+  [/\bcinta mu\b/gi, "cintamu"],
+  [/\bsayang mu\b/gi, "sayangmu"],
+  [/\bjiwa mu\b/gi, "jiwamu"],
+  [/\brindu mu\b/gi, "rindumu"],
+  [/\btana\b(?=\s*[.,!?;:]|\s*$)/gi, "tanah"],
+  [/\bpecahaya\b/gi, "percaya"],
+  [/\bbesama\b/gi, "bersama"],
+  [/\bseorang diri\b/gi, "sendiri"],
+  [/\bberjalan pergi\b/gi, "pergi"],
+];
+
+function applyCorrections(text: string, lang: string): string {
+  if (lang !== "ms") return text;
+  let out = text;
+  for (const [re, rep] of MS_CORRECTIONS) out = out.replace(re, rep);
+  return out;
 }
 
-// ✅ v8.44: metadata video (tajuk + channel + DURATION)
-async function fetchVideoMeta(videoId: string): Promise<{ title: string; channel: string; duration: number } | null> {
+function saveCache(videoId: string, data: {
+  lines: Line[]; offsetMs?: number; source?: string; lang?: string; leadIn?: number; meta?: VideoMeta | null;
+}) {
+  try {
+    fs.writeFileSync(path.join(lyricsDir, videoId + ".json"), JSON.stringify({
+      v: 1,
+      offsetMs: data.offsetMs || 0,
+      source: data.source || "UNKNOWN",
+      lang: data.lang || "?",
+      leadIn: data.leadIn || 0,
+      meta: data.meta || null,
+      lines: data.lines,
+    }));
+  } catch (e) {}
+}
+
+function parseArtistTitle(raw: string, channel: string): { artist: string; title: string } {
+  let t = raw
+    .replace(/\([^)]*\)/g, " ")
+    .replace(/\[[^\]]*\]/g, " ")
+    .replace(/official (music )?(video|audio|lyric(s)? video)?/gi, " ")
+    .replace(/lyric(s)? video/gi, " ")
+    .replace(/\bmv\b/gi, " ")
+    .replace(/hq|hd|full (version|song)?/gi, " ")
+    .replace(/\s*\|\s*/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  let artist = "";
+  let title = t;
+  const dashMatch = t.match(/^(.+?)\s*[-–—]\s*(.+)$/);
+  if (dashMatch) {
+    artist = dashMatch[1].trim();
+    title = dashMatch[2].trim();
+  } else {
+    artist = channel.replace(/VEVO|Official|Music|Channel/gi, "").replace(/Topic$/, "").trim();
+  }
+  return { artist, title };
+}
+
+async function fetchVideoMeta(videoId: string): Promise<VideoMeta | null> {
   try {
     const { stdout } = await execFileAsync(ytdlp, [
       "--skip-download", "--no-warnings", "--quiet",
       "--print", "%(title)s\t%(channel)s\t%(duration)s",
       "--cookies", cookiesPath,
       "https://www.youtube.com/watch?v=" + videoId,
-    ], { timeout: 20000 });
+    ], { timeout: 8000 });
     const line = (stdout || "").split("\n").find((l) => l.includes("\t"));
     if (!line) return null;
     const parts = line.split("\t");
@@ -128,40 +206,8 @@ async function fetchVideoMeta(videoId: string): Promise<{ title: string; channel
       duration: parseInt(parts[2] || "0", 10) || 0,
     };
   } catch (e: any) {
-    console.log(`[LYRICS] ⚠️ meta fail: ${(e.message || "").slice(0, 50)}`);
     return null;
   }
-}
-
-// ✅ v8.44: parse "Artist - Title (Audio)" → { artist, title }
-function parseArtistTitle(raw: string, channel: string): { artist: string; title: string } {
-  let t = raw
-    .replace(/\([^)]*\)/g, " ")          // buang (Audio), (Official MV) dll
-    .replace(/\[[^\]]*\]/g, " ")          // buang [Lyric Video] dll
-    .replace(/official (music )?(video|audio|lyric(s)? video)?/gi, " ")
-    .replace(/lyric(s)? video/gi, " ")
-    .replace(/\bmv\b/gi, " ")
-    .replace(/hq|hd|full (version|song)?/gi, " ")
-    .replace(/\s*\|\s*/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-
-  let artist = "";
-  let title = t;
-
-  // Format "Artist - Title"
-  const dashMatch = t.match(/^(.+?)\s*[-–—]\s*(.+)$/);
-  if (dashMatch) {
-    artist = dashMatch[1].trim();
-    title = dashMatch[2].trim();
-  } else {
-    // Guna channel sebagai artis kalau ada
-    artist = channel
-      .replace(/VEVO|Official|Music|VEVO|Channel/gi, "")
-      .replace(/Topic$/, "")
-      .trim();
-  }
-  return { artist, title };
 }
 
 async function probeVideoLang(videoId: string): Promise<"ms" | "en" | "?"> {
@@ -170,7 +216,7 @@ async function probeVideoLang(videoId: string): Promise<"ms" | "en" | "?"> {
       "--list-subs", "--skip-download", "--no-warnings",
       "--cookies", cookiesPath,
       "https://www.youtube.com/watch?v=" + videoId,
-    ], { timeout: 20000 });
+    ], { timeout: 8000 });
     const out = stdout || "";
     if (/\bms\b|Malay/i.test(out)) return "ms";
     if (/\ben\b|English/i.test(out)) return "en";
@@ -191,8 +237,21 @@ socket.on("music:status", (d: any) => {
     const videoId = idm ? idm[1] : "";
     if (current && current.videoId === videoId && current.t0 > 0 && !current.pausedAt) return;
     console.log(`[LYRICS] 🎵 Now playing: "${d.q}" (${videoId})`);
-    current = { title: String(d.q || ""), videoId, t0: Date.now(), pausedAt: 0, lines: [], hasLyrics: false, loading: true, offsetMs: 0, source: "", lang: "", lastTickAt: 0 };
-    void loadLyrics(videoId);
+    current = {
+      title: String(d.q || ""),
+      videoId,
+      t0: Date.now(),
+      pausedAt: 0,
+      lines: [],
+      hasLyrics: false,
+      loading: true,
+      offsetMs: 0,
+      leadIn: 0,
+      source: "",
+      lang: "",
+      lastTickAt: 0,
+    };
+    void loadLyrics(videoId, String(d.q || ""));
   }
   if (d.state === "PAUSED" && current && !current.pausedAt) {
     current.pausedAt = Date.now();
@@ -225,106 +284,107 @@ socket.on("music:tick", (d: any) => {
   }
 });
 
+socket.on("music:leadin", (d: any) => {
+  if (!current || !d || current.videoId !== d.videoId) return;
+  const ms = Math.max(0, Math.min(15000, Number(d.ms) || 0));
+  current.leadIn = ms;
+  console.log(`[LYRICS] ⏱️ Lead-in: ${ms}ms`);
+  if (current.lines.length > 0) {
+    saveCache(current.videoId, {
+      lines: current.lines, offsetMs: current.offsetMs, source: current.source,
+      lang: current.lang, leadIn: ms, meta: null,
+    });
+  }
+});
+
 socket.on("lyrics:offset", (d: any) => {
   if (!current) return;
   const delta = Number(d && d.delta) || 0;
   current.offsetMs = (current.offsetMs || 0) + delta;
   console.log(`[LYRICS] ⚙️ Offset "${current.title}": ${current.offsetMs > 0 ? "+" : ""}${current.offsetMs}ms`);
-  if (current.lines.length > 0) saveCache(current.videoId, current.lines, current.offsetMs, current.source, current.lang);
+  if (current.lines.length > 0) {
+    saveCache(current.videoId, {
+      lines: current.lines, offsetMs: current.offsetMs, source: current.source,
+      lang: current.lang, leadIn: current.leadIn, meta: null,
+    });
+  }
 });
 
 async function fetchWithRetry(url: string, options: RequestInit, label: string): Promise<Response> {
   try {
     return await fetch(url, options);
   } catch (e: any) {
-    console.log(`[LYRICS] ⏳ ${label} network fail - retry 3s...`);
-    await new Promise((r) => setTimeout(r, 3000));
+    console.log(`[LYRICS] ⏳ ${label} fail - retry 2s...`);
+    await new Promise((r) => setTimeout(r, 2000));
     return await fetch(url, options);
   }
 }
 
-// ✅ v8.44: LRCLIB GET (exact match: track+artist+duration) — paling tepat
 async function lrclibGetExact(track: string, artist: string, durationSec: number, guess: string): Promise<Line[] | null> {
   if (!track || !artist || !durationSec) return null;
   try {
     const url = `https://lrclib.net/api/get?track_name=${encodeURIComponent(track)}&artist_name=${encodeURIComponent(artist)}&duration=${durationSec}`;
-    const res = await fetchWithRetry(url, { headers: { "User-Agent": "BATIA-OS/8.44" } }, "LRCLIB-GET");
+    const res = await fetchWithRetry(url, { headers: { "User-Agent": "BATIA-OS/8.49" } }, "LRCLIB-GET");
     if (!res.ok) return null;
     const x: any = await res.json();
     if (!x || !x.syncedLyrics) return null;
-    // ✅ Duration validation — reject kalau LRCLIB duration lari jauh (> 30s)
-    if (x.duration && Math.abs(x.duration - durationSec) > 30) {
-      console.log(`[LYRICS] ⏭️ LRCLIB-GET reject: duration mismatch (${x.duration}s vs ${durationSec}s)`);
-      return null;
-    }
+    if (x.duration && Math.abs(x.duration - durationSec) > 30) return null;
     const lLang = textLang(String(x.syncedLyrics).slice(0, 600));
-    if (guess === "ms" && lLang === "en") { console.log(`[LYRICS] ⏭️ LRCLIB-GET reject: English untuk lagu Melayu`); return null; }
-    if (guess === "en" && lLang === "ms") { console.log(`[LYRICS] ⏭️ LRCLIB-GET reject: Melayu untuk lagu English`); return null; }
+    if (guess === "ms" && lLang === "en") return null;
+    if (guess === "en" && lLang === "ms") return null;
     const lines = parseLrc(String(x.syncedLyrics));
-    if (lines.length > 0) {
-      console.log(`[LYRICS] ✅ LRCLIB-GET (exact): "${x.trackName}" - ${x.artistName} (${lines.length} baris)`);
-      return lines;
-    }
+    if (lines.length > 0) console.log(`[LYRICS] ✅ LRCLIB-GET (exact): "${x.trackName}" - ${x.artistName} (${lines.length} baris)`);
+    return lines;
   } catch (e: any) {}
   return null;
 }
 
-// ✅ v8.44: LRCLIB SEARCH dengan stricter match + duration filter
 async function lrclibSearch(query: string, guess: string, videoDurationSec: number, expectedArtist: string): Promise<Line[]> {
   try {
     const res = await fetchWithRetry(
       "https://lrclib.net/api/search?q=" + encodeURIComponent(query),
-      { headers: { "User-Agent": "BATIA-OS/8.44" } },
+      { headers: { "User-Agent": "BATIA-OS/8.49" } },
       "LRCLIB"
     );
     if (!res.ok) return [];
     const arr: any[] = await res.json();
     if (!Array.isArray(arr) || arr.length === 0) return [];
-
     const nq = normT(query);
-    const qTokens = nq.split(" ").filter((t) => t.length > 2);
+    const nExpected = normT(expectedArtist);
     let best: any = null;
     let bestScore = 0;
-
     for (const x of arr) {
       if (!x || !x.syncedLyrics) continue;
       const nt = normT(String(x.trackName || ""));
       const na = normT(String(x.artistName || ""));
-      const nExpected = normT(expectedArtist);
       if (!nt) continue;
-
-      // ✅ Duration validation: reject kalau lari > 30s dari video
       if (videoDurationSec && x.duration && Math.abs(x.duration - videoDurationSec) > 30) continue;
-
       let score = 0;
       if (nt === nq) score = 4;
       else if (nq.includes(nt) && nt.length >= 3) score = 3;
       else if (nt.includes(nq) && nq.length >= 6) score = 2;
       else continue;
-
-      // ✅ Artis match = WAJIB kalau kita ada expected artist
-      if (nExpected && !na.includes(nExpected)) {
-        // Tak match artis, skip (ini punca masalah Search/Kejora!)
-        continue;
+      // ✅ v8.49: longgar artist match - partial token match OK (lebih banyak match dari LRCLIB)
+      if (nExpected && nExpected.length > 3) {
+        const artistTokens = nExpected.split(" ").filter((t) => t.length > 2);
+        const anyMatch = artistTokens.some((t) => na.includes(t));
+        if (!anyMatch) continue;
       }
-
       const lLang = textLang(String(x.syncedLyrics).slice(0, 600));
       if (guess === "ms" && lLang === "en") continue;
       if (guess === "en" && lLang === "ms") continue;
       if (lLang === guess && guess !== "?") score += 2;
-      if (na.includes(nExpected)) score += 2;
-
+      if (nExpected && nExpected.length > 3) {
+        const artistTokens = nExpected.split(" ").filter((t) => t.length > 2);
+        if (artistTokens.some((t) => na.includes(t))) score += 2;
+      }
       if (score > bestScore) { bestScore = score; best = x; }
     }
-
     if (!best || bestScore < 2) return [];
     const lines = parseLrc(String(best.syncedLyrics));
-    if (lines.length > 0) {
-      console.log(`[LYRICS] ✅ LRCLIB search: "${best.trackName}" - ${best.artistName} (${lines.length} baris, score=${bestScore})`);
-    }
+    if (lines.length > 0) console.log(`[LYRICS] ✅ LRCLIB search: "${best.trackName}" - ${best.artistName} (${lines.length} baris)`);
     return lines;
   } catch (e: any) {
-    console.log(`[LYRICS] ⚠️ LRCLIB search fail: ${(e.message || "").slice(0, 60)}`);
     return [];
   }
 }
@@ -371,7 +431,7 @@ async function fetchYtSubs(videoId: string): Promise<Line[]> {
       "-o", path.join(lyricsDir, videoId),
       "--no-warnings", "--quiet", "--no-cache-dir", "--cookies", cookiesPath,
       "https://www.youtube.com/watch?v=" + videoId,
-    ], { timeout: 25000 });
+    ], { timeout: 20000 });
     const files = fs.readdirSync(lyricsDir).filter((f) => f.startsWith(videoId + ".") && f.endsWith(".vtt"));
     files.sort((a, b) => {
       const score = (f: string) => (f.includes(".ms") ? 0 : f.includes(".en") ? 1 : 2);
@@ -382,9 +442,7 @@ async function fetchYtSubs(videoId: string): Promise<Line[]> {
       if (lines.length > 0) console.log(`[LYRICS] ✅ YouTube subs: ${lines.length} baris`);
       return lines;
     }
-  } catch (e: any) {
-    console.log(`[LYRICS] ⚠️ yt-dlp subs fail`);
-  }
+  } catch (e: any) {}
   return [];
 }
 
@@ -395,13 +453,10 @@ async function transcribeWhisper(videoId: string, guess: string): Promise<Line[]
     if (f) file = path.join(musicDir, f);
   } catch (e) {}
   if (!file || !fs.existsSync(file)) return [];
-
   const size = fs.statSync(file).size;
   if (size > 24 * 1024 * 1024) return [];
-
   const key = process.env.GROQ_API_KEY || "";
   if (!key) return [];
-
   try {
     const start = Date.now();
     const buf = fs.readFileSync(file);
@@ -415,6 +470,10 @@ async function transcribeWhisper(videoId: string, guess: string): Promise<Line[]
     form.append("timestamp_granularities[]", "segment");
     if (guess === "ms") form.append("language", "ms");
     else if (guess === "en") form.append("language", "en");
+    // ✅ v8.49: initial_prompt untuk paksa Whisper fokus Melayu (elak hallucinate English)
+    if (guess === "ms") {
+      form.append("initial_prompt", "Lagu Melayu. Perkataan: yang, dan, aku, kau, hati, cinta, jiwa, rindu, dunia, hidup, mati, malam, siang, langit, bumi, angin, hujan, rindu, kasih, sayang, lumrah, mudah, bersama, percaya, kerana, selalu, sendiri, sepi, sunyi, indah, derita, luka, pedih, air mata, kenangan, jemari, bayangan, takdir, harapan.");
+    }
     const res = await fetchWithRetry("https://api.groq.com/openai/v1/audio/transcriptions", {
       method: "POST",
       headers: { Authorization: "Bearer " + key },
@@ -423,11 +482,15 @@ async function transcribeWhisper(videoId: string, guess: string): Promise<Line[]
     if (!res.ok) return [];
     const data: any = await res.json();
     const segs: any[] = Array.isArray(data.segments) ? data.segments : [];
-    const lines: Line[] = [];
+    let lines: Line[] = [];
     let skipped = 0;
+    let corrected = 0;
     for (const s of segs) {
-      const text = cleanLine(String(s.text || ""));
-      if (!text || isBadLine(text)) { skipped++; continue; }
+      const rawText = cleanLine(String(s.text || ""));
+      if (!rawText || isBadLine(rawText)) { skipped++; continue; }
+      // ✅ v8.49: apply corrections
+      const text = applyCorrections(rawText, guess);
+      if (text !== rawText) corrected++;
       const a = Math.round((s.start || 0) * 1000);
       const b = Math.round((s.end || s.start || 0) * 1000);
       const prev = lines[lines.length - 1];
@@ -435,96 +498,121 @@ async function transcribeWhisper(videoId: string, guess: string): Promise<Line[]
       else lines.push({ a, b, text, words: [] });
     }
     if (skipped > 0) console.log(`[LYRICS] 🧹 Buang ${skipped} hallucination`);
-    if (isInsufficientLyrics(lines)) return [];
-    console.log(`[LYRICS] ✅ Whisper: ${lines.length} baris (lang=${guess || "auto"})`);
+    if (corrected > 0) console.log(`[LYRICS] ✏️ Post-corrected ${corrected} baris (Whisper Malay)`);
+
+    let songLang: "ms" | "en" | "?" = guess !== "?" ? guess : textLang(lines.map((l) => l.text).join(" "));
+    if (songLang === "?") {
+      const dl = String(data.language || "").toLowerCase();
+      songLang = dl.startsWith("ms") || dl.startsWith("id") ? "ms" : dl === "en" ? "en" : "?";
+    }
+    if (songLang !== "?") {
+      const before = lines.length;
+      lines = filterLinesByLang(lines, songLang);
+      if (before !== lines.length) console.log(`[LYRICS] 🧹 Buang ${before - lines.length} baris campur (kekalkan ${songLang})`);
+    }
+
+    if (isInsufficientLyrics(lines)) {
+      console.log(`[LYRICS] ❌ Whisper insufficient selepas tapis (${lines.length} baris) - reject`);
+      return [];
+    }
+    console.log(`[LYRICS] ✅ Whisper: ${lines.length} baris (lang=${songLang})`);
     return ensureWords(lines);
   } catch (e: any) {
     return [];
   }
 }
 
-// ---------- Chain lirik ----------
-async function loadLyrics(videoId: string) {
+async function loadLyrics(videoId: string, dashboardQuery: string) {
   if (!videoId) { if (current) current.loading = false; return; }
   const cacheJson = path.join(lyricsDir, videoId + ".json");
 
-  // ✅ v8.44: metadata lengkap
-  const meta = await fetchVideoMeta(videoId);
-  const rawTitle = meta?.title || (current ? current.title : videoId);
-  const channel = meta?.channel || "";
-  const videoDuration = meta?.duration || 0;
-  const { artist, title } = parseArtistTitle(rawTitle, channel);
-
-  if (current) current.title = artist ? `${artist} - ${title}` : title;
-  console.log(`[LYRICS] 📼 Meta: "${artist || "?"} - ${title}" | channel: ${channel} | duration: ${videoDuration}s`);
-
-  let guess = textLang(title + " " + artist);
-  if (guess === "?") guess = await probeVideoLang(videoId);
-  if (current) current.lang = guess;
-
-  // Cache check
+  // ========== PHASE 0: Cache check (FAST PATH) ==========
   try {
     if (fs.existsSync(cacheJson)) {
       const rawJson = JSON.parse(fs.readFileSync(cacheJson, "utf8"));
       const isObj = rawJson && !Array.isArray(rawJson) && Array.isArray(rawJson.lines);
-      const linesArr: Line[] = isObj ? rawJson.lines : (Array.isArray(rawJson) ? rawJson : []);
-      const off: number = isObj ? (rawJson.offsetMs || 0) : 0;
-      const src: string = isObj ? (rawJson.source || "CACHE") : "CACHE";
-      const cleaned = ensureWords(linesArr.filter((l) => !isBadLine(l.text)));
-      const cacheLang = textLang(cleaned.slice(0, 8).map((l) => l.text).join(" "));
-      const insufficient = isInsufficientLyrics(cleaned);
-      if ((guess !== "?" && cacheLang !== "?" && cacheLang !== guess) || insufficient) {
-        try { fs.unlinkSync(cacheJson); } catch (e) {}
-      } else {
+      const cachedLines: Line[] = isObj ? (rawJson.lines || []) : (Array.isArray(rawJson) ? rawJson : []);
+      const cachedMeta: VideoMeta | null = isObj ? (rawJson.meta || null) : null;
+      const cachedOffset = isObj ? (rawJson.offsetMs || 0) : 0;
+      const cachedLead = isObj ? (rawJson.leadIn || 0) : 0;
+      const cachedSource = isObj ? (rawJson.source || "CACHE") : "CACHE";
+      const cachedLang: string = isObj ? (rawJson.lang || "?") : "?";
+
+      let cleaned = ensureWords(cachedLines.filter((l) => !isBadLine(l.text)));
+      if (!isInsufficientLyrics(cleaned)) {
         if (current && current.videoId === videoId) {
           current.lines = cleaned;
           current.hasLyrics = cleaned.length > 0;
-          current.offsetMs = off;
-          current.source = src;
+          current.offsetMs = cachedOffset;
+          current.leadIn = cachedLead;
+          current.source = cachedSource;
+          current.lang = cachedLang;
           current.loading = false;
+          if (cachedMeta) {
+            const parsed = parseArtistTitle(cachedMeta.title, cachedMeta.channel);
+            current.title = parsed.artist ? `${parsed.artist} - ${parsed.title}` : cachedMeta.title;
+          }
         }
-        console.log(`[LYRICS] ⚡ Cache hit: ${videoId} (${cleaned.length} baris, src ${src})`);
+        console.log(`[LYRICS] ⚡ INSTANT cache hit: ${videoId} (${cleaned.length} baris, src ${cachedSource})`);
         return;
       }
     }
   } catch (e) {}
 
+  // ========== PHASE 1: PARALLEL fetch ==========
+  console.log(`[LYRICS] 🔄 Fetch parallel: meta + probe lang untuk ${videoId}...`);
+  const [meta, probeLang] = await Promise.all([
+    fetchVideoMeta(videoId),
+    probeVideoLang(videoId),
+  ]);
+
+  const rawTitle = meta?.title || dashboardQuery || videoId;
+  const channel = meta?.channel || "";
+  const videoDuration = meta?.duration || 0;
+  const { artist, title } = parseArtistTitle(rawTitle, channel);
+  if (current) current.title = artist ? `${artist} - ${title}` : title;
+  console.log(`[LYRICS] 📼 Meta: "${artist || "?"} - ${title}" | duration: ${videoDuration}s`);
+
+  let guess: "ms" | "en" | "?" = textLang(title + " " + artist);
+  if (guess === "?") guess = probeLang;
+  if (current) current.lang = guess;
+
+  // ========== PHASE 2: Chain lirik ==========
   let lines: Line[] = [];
   let source = "";
 
-  // ✅ v8.44 chain: LRCLIB-GET (exact) → LRCLIB search (multiple queries) → YT subs → Whisper
-
-  // Step 1: LRCLIB exact GET
   if (artist && title && videoDuration > 0) {
     const got = await lrclibGetExact(title, artist, videoDuration, guess);
     if (got && got.length > 0) { lines = got; source = "LRCLIB"; }
   }
-
-  // Step 2: LRCLIB search dengan multiple queries
   if (lines.length === 0) {
     const queries: string[] = [];
-    if (artist && title) {
-      queries.push(`${artist} ${title}`);
-      queries.push(`${title} ${artist}`);
-      queries.push(title);
-    } else {
-      queries.push(title);
-    }
+    if (artist && title) { queries.push(`${artist} ${title}`); queries.push(`${title} ${artist}`); queries.push(title); }
+    else queries.push(title);
     for (const q of queries) {
       if (lines.length > 0) break;
       const got = await lrclibSearch(q, guess, videoDuration, artist);
       if (got && got.length > 0) { lines = got; source = "LRCLIB"; }
     }
   }
-
-  // Step 3: YouTube subs
   if (lines.length === 0) { lines = await fetchYtSubs(videoId); if (lines.length > 0) source = "YT-SUBS"; }
-
-  // Step 4: Whisper
   if (lines.length === 0) { lines = await transcribeWhisper(videoId, guess); if (lines.length > 0) source = "WHISPER"; }
 
+  if (lines.length > 0 && source === "WHISPER" && guess !== "?") {
+    const before = lines.length;
+    lines = filterLinesByLang(lines, guess);
+    if (before !== lines.length) console.log(`[LYRICS] 🧹 Buang ${before - lines.length} baris campur (kekalkan ${guess})`);
+  }
+
   if (lines.length > 0) {
-    saveCache(videoId, lines, current ? current.offsetMs : 0, source, guess);
+    saveCache(videoId, {
+      lines,
+      offsetMs: current ? current.offsetMs : 0,
+      source,
+      lang: guess,
+      leadIn: current ? current.leadIn : 0,
+      meta,
+    });
     if (current && current.videoId === videoId) current.source = source;
   }
   if (current && current.videoId === videoId) {
@@ -566,7 +654,7 @@ function parseVtt(vtt: string): Line[] {
 
 function computePayload(): any {
   if (!current) {
-    return { v: SERVER_VERSION, playing: false, title: "", elapsed: 0, hasLyrics: false, loading: false, prev: null, line: null, next: null, sync: false, offsetMs: 0, source: "", lang: "" };
+    return { v: SERVER_VERSION, playing: false, title: "", elapsed: 0, hasLyrics: false, loading: false, prev: null, line: null, next: null, sync: false, offsetMs: 0, leadIn: 0, source: "", lang: "" };
   }
   const now = Date.now();
   const tickFresh = current.lastTickAt && (now - current.lastTickAt) < 3000;
@@ -574,7 +662,8 @@ function computePayload(): any {
   if (tickFresh && current.frontendElapsed !== undefined) elapsed = current.frontendElapsed;
   else if (current.pausedAt) elapsed = current.frontendElapsed ?? (current.pausedAt - current.t0);
   else elapsed = now - current.t0;
-  elapsed = Math.max(0, elapsed - LYRICS_OFFSET_MS - (current.offsetMs || 0));
+  const lead = current.source === "LRCLIB" ? (current.leadIn || 0) : 0;
+  elapsed = Math.max(0, elapsed - LYRICS_OFFSET_MS - (current.offsetMs || 0) - lead);
 
   let prev: Line | null = null;
   let line: Line | null = null;
@@ -587,7 +676,7 @@ function computePayload(): any {
       next = current.lines[idx + 1] || null;
     }
   }
-  return { v: SERVER_VERSION, playing: true, title: current.title, elapsed, hasLyrics: current.hasLyrics, loading: current.loading, prev, line, next, sync: tickFresh, offsetMs: current.offsetMs || 0, source: current.source || "", lang: current.lang || "" };
+  return { v: SERVER_VERSION, playing: true, title: current.title, elapsed, hasLyrics: current.hasLyrics, loading: current.loading, prev, line, next, sync: tickFresh, offsetMs: current.offsetMs || 0, leadIn: lead, source: current.source || "", lang: current.lang || "" };
 }
 
 const server = http.createServer((req, res) => {
@@ -660,7 +749,7 @@ const server = http.createServer((req, res) => {
   const s = io();
   s.on("lyrics:update", (d) => {
     if (d.v && d.v !== PAGE_VERSION) { location.reload(); return; }
-    elVer.textContent = "v" + PAGE_VERSION + (d.source ? " | " + d.source : "") + (d.lang ? " | " + d.lang : "") + (d.offsetMs ? " | off " + (d.offsetMs > 0 ? "+" : "") + d.offsetMs + "ms" : "");
+    elVer.textContent = "v" + PAGE_VERSION + (d.source ? " | " + d.source : "") + (d.lang ? " | " + d.lang : "") + (d.leadIn ? " | lead " + d.leadIn + "ms" : "") + (d.offsetMs ? " | off " + (d.offsetMs > 0 ? "+" : "") + d.offsetMs + "ms" : "");
     if (!d.playing) {
       elBox.classList.remove("on");
       elTitle.style.display = "none";
