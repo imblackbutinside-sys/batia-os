@@ -22,7 +22,7 @@ const policyPath = path.resolve(__dirname, "../../../policies/tiktok_my_2026.yam
 const engine = new LiveContextEngine(new PolicyEngine(policyPath));
 
 console.log("[EVENTS] WS_EVENTS =", JSON.stringify(WS_EVENTS));
-console.log("[BUILD] BATIA v8.38 - relay lyrics:offset calibration");
+console.log("[BUILD] BATIA v8.45 - emit STOPPED bila lagu tamat natural");
 
 try {
   const audioDir = path.join(process.cwd(), "audio");
@@ -874,6 +874,11 @@ io.on("connection", (socket) => {
   socket.on("music:ended", () => {
     if (!songPlaying) return;
     songPlaying = false; currentlyPlayingQ = "";
+    // ✅ v8.45: bagitahu lyrics server lagu dah habis (kalau tiada next dalam queue)
+    if (songQueue.length === 0) {
+      io.emit("music:status", { state: "STOPPED" });
+      console.log("[MUSIC] 🏁 Lagu tamat - emit STOPPED untuk lyrics overlay");
+    }
     setTimeout(() => void playNextInQueue(), 500);
   });
 
