@@ -109,7 +109,6 @@ export default function Dashboard() {
 
   useEffect(() => {
     socket.on("connect", () => {
-      // ✅ v8.18: clear audio queue lama bila reconnect (elak baca balik response lama)
       audioQueue.current = [];
       playing.current = false;
       const a = musicAudio.current;
@@ -428,6 +427,8 @@ export default function Dashboard() {
             <button onClick={() => send("Berapa harga earbuds ni?")} className="bg-amber-700 rounded px-3 py-2 text-sm text-left">SHOP 1: Harga earbuds</button>
             <button onClick={() => send("Battery tahan berapa jam?")} className="bg-amber-700 rounded px-3 py-2 text-sm text-left">SHOP 2: Soalan battery</button>
             <button onClick={() => send("Ada promo tak hari ni?")} className="bg-amber-700 rounded px-3 py-2 text-sm text-left">SHOP 3: Promo</button>
+            <button onClick={() => socket.emit(WS_EVENTS.GIFT_RECEIVED, { username: "test_user", giftName: "Heart Me", giftValue: 1 })} className="bg-pink-700 rounded px-3 py-2 text-sm text-left">Test GIFT: Heart Me (overlay 🧡)</button>
+            <button onClick={() => socket.emit(WS_EVENTS.GIFT_RECEIVED, { username: "test_user", giftName: "Rose", giftValue: 1 })} className="bg-pink-700 rounded px-3 py-2 text-sm text-left">Test GIFT: Rose (overlay 🌹)</button>
             <button onClick={() => socket.emit("test:join", {})} className="bg-teal-700 rounded px-3 py-2 text-sm text-left">Test JOIN: penonton baru masuk</button>
             <button onClick={() => send("boleh request lagu instrumental santai tak?")} className="bg-teal-700 rounded px-3 py-2 text-sm text-left">Test MUZIK: request lagu</button>
           </div>

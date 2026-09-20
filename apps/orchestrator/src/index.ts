@@ -22,7 +22,7 @@ const policyPath = path.resolve(__dirname, "../../../policies/tiktok_my_2026.yam
 const engine = new LiveContextEngine(new PolicyEngine(policyPath));
 
 console.log("[EVENTS] WS_EVENTS =", JSON.stringify(WS_EVENTS));
-console.log("[BUILD] BATIA v8.18b - grace timer start before connect");
+console.log("[BUILD] BATIA v8.38 - relay lyrics:offset calibration");
 
 try {
   const audioDir = path.join(process.cwd(), "audio");
@@ -214,9 +214,65 @@ let pitchIdx = 0;
 let lastPitch = Date.now() - 200000;
 let lastGreet = 0;
 const lastCommentTime: Record<string, number> = {};
-// ✅ Grace period untuk discard backlog TikTok lepas reconnect
 let tiktokConnectTime = 0;
 const BACKLOG_GRACE_MS = 8000;
+
+const lastUserFile = path.join(process.cwd(), "last_tiktok_user.txt");
+let lastTikTokUser: string | null = null;
+try {
+  if (fs.existsSync(lastUserFile)) {
+    lastTikTokUser = fs.readFileSync(lastUserFile, "utf8").trim() || null;
+    if (lastTikTokUser) console.log("[TikTok] 📌 Last user dari file:", lastTikTokUser);
+  }
+} catch (e) {}
+let reconnectFails = 0;
+let connectInFlight = false;
+
+function doTikTokConnect(username: string) {
+  if (connectInFlight) return;
+  connectInFlight = true;
+  io.emit(WS_EVENTS.TIKTOK_STATUS, { status: "CONNECTING..." });
+  try {
+    tiktokConnectTime = Date.now();
+    tiktok.connect(username, {
+      onComment: processComment,
+      onGift: processGift,
+      onLike: (n: number) => { likeTimes.push(Date.now()); liveStats.totalLikes += n; },
+      onViewer: (v: number) => { liveStats.viewers = v; },
+      onStatus: (s) => {
+        console.log(`[TikTok] status -> ${s}`);
+        io.emit(WS_EVENTS.TIKTOK_STATUS, { status: s });
+      },
+      onJoin: (u) => handleJoin(u),
+    });
+    let tries = 0;
+    const poll = setInterval(() => {
+      tries++;
+      if (tiktok.connected) {
+        clearInterval(poll);
+        connectInFlight = false;
+        reconnectFails = 0;
+        tiktokConnectTime = Date.now();
+        songQueue = [];
+        songPlaying = false;
+        currentlyPlayingQ = "";
+        emitSongQueue();
+        io.emit("music:status", { state: "STOPPED" });
+        console.log("[TikTok] CONNECTED | backlog grace 8s + music queue cleared");
+        io.emit(WS_EVENTS.TIKTOK_STATUS, { status: "CONNECTED" });
+      } else if (tries > 30) {
+        clearInterval(poll);
+        connectInFlight = false;
+        reconnectFails++;
+      }
+    }, 1000);
+  } catch (e: any) {
+    connectInFlight = false;
+    reconnectFails++;
+    console.error("[TikTok] connect error:", (e && e.message) || e);
+    io.emit(WS_EVENTS.TIKTOK_STATUS, { status: "DISCONNECTED" });
+  }
+}
 
 let autoTapEnabled = false;
 let autoTapInterval: NodeJS.Timeout | null = null;
@@ -410,7 +466,7 @@ async function fetchMusic(q: string): Promise<string | null> {
     ];
 
     const start = Date.now();
-    const { stdout } = await execFileAsync(ytdlp, args, { timeout: 12000 });
+    const { stdout } = await execFileAsync(ytdlp, args, { timeout: 30000 });
     console.log(`[MUSIC] ✅ yt-dlp done in ${((Date.now() - start) / 1000).toFixed(1)}s`);
 
     let filename = "";
@@ -442,8 +498,10 @@ async function fetchMusic(q: string): Promise<string | null> {
     return null;
   } catch (e: any) {
     const errMsg = (e.message || "").split("\n").slice(0, 5).join("\n  ");
+    const errOut = ((e.stderr || "").toString()).split("\n").filter(Boolean).slice(0, 3).join(" | ");
     console.error(`[MUSIC] ❌ Failed "${cleanTitle}":`);
     console.error(`  ${errMsg}`);
+    if (errOut) console.error(`  stderr: ${errOut}`);
     failedDownloads.set(key, Date.now());
     return null;
   }
@@ -476,6 +534,7 @@ async function playNextInQueue() {
   if (!songPlaying) { console.log("[MUSIC] ⛔ Stop semasa download - dibatalkan"); return; }
   if (url) {
     currentMusicFile = path.join(musicDir, path.basename(url));
+    if (!sink) console.log("[MUSIC] ⚠️ TIADA audio sink! Lagu tak akan berbunyi - buka dashboard & klik SPEAKER");
     io.emit("music:status", { state: "PLAYING", q: next.q, url: "http://localhost:4000" + url, audioFor: sink, requestedBy: next.by });
   } else {
     io.emit("music:status", { state: "FAILED", q: next.q, audioFor: sink });
@@ -570,7 +629,6 @@ async function processComment(username: string, text: string) {
   lastCommentTime[username] = now;
   try {
     if (isDuplicateComment(username, text)) { console.log(`[DEBUG] DITOLAK: Duplicate`); return; }
-    // ✅ Discard backlog TikTok lepas reconnect
     if (tiktokConnectTime && now - tiktokConnectTime < BACKLOG_GRACE_MS) {
       console.log(`[BACKLOG] ⏭️ Discard komen lama (${username}): "${text.slice(0, 40)}"`);
       return;
@@ -673,13 +731,13 @@ async function processComment(username: string, text: string) {
 
 async function processGift(username: string, giftName: string, giftValue: number) {
   try {
-    // ✅ Discard gift backlog lepas reconnect
     if (tiktokConnectTime && Date.now() - tiktokConnectTime < BACKLOG_GRACE_MS) {
       console.log(`[BACKLOG] ⏭️ Discard gift lama (${username}): ${giftName}`);
       return;
     }
     const session = await ensureSession();
     liveStats.gifts++;
+    io.emit("gift:visual", { username, giftName, giftValue });
     let reaction = await engine.handleGift(session.id, username, giftName, giftValue);
     if (currentMode === "REGULAR") reaction = sanitizeForRegularMode(reaction);
     if (isDuplicateResponse(reaction)) return;
@@ -688,10 +746,32 @@ async function processGift(username: string, giftName: string, giftValue: number
   } catch (e) {}
 }
 
+setInterval(() => {
+  if (!lastTikTokUser || tiktok.connected || connectInFlight) return;
+  if (reconnectFails > 40) {
+    console.log("[TikTok] ⛔ Auto-reconnect give up selepas 40 cubaan - klik CONNECT LIVE manual");
+    lastTikTokUser = null;
+    return;
+  }
+  console.log(`[TikTok] 🔄 Auto-reconnect (fails=${reconnectFails}): sambung semula ${lastTikTokUser}...`);
+  io.emit(WS_EVENTS.TIKTOK_STATUS, { status: "RECONNECTING..." });
+  doTikTokConnect(lastTikTokUser);
+}, 15000);
+
+if (lastTikTokUser) {
+  setTimeout(() => {
+    if (!tiktok.connected && lastTikTokUser && !connectInFlight) {
+      console.log("[TikTok] 🚀 Startup auto-connect:", lastTikTokUser);
+      doTikTokConnect(lastTikTokUser);
+    }
+  }, 8000);
+}
+
 io.on("connection", (socket) => {
   console.log("[WS] client connected:", socket.id);
+  const isOverlay = String(socket.handshake.query.overlay || "") === "1";
   const oldSink = audioSink ? io.sockets.sockets.get(audioSink.id) : null;
-  if (!audioSink || !oldSink) {
+  if (!isOverlay && (!audioSink || !oldSink)) {
     audioSink = { id: socket.id, label: "LAPTOP" };
     console.log("[WS] audio sink auto-claim:", socket.id);
     clearAllCaches();
@@ -716,44 +796,20 @@ io.on("connection", (socket) => {
   socket.on(WS_EVENTS.GIFT_RECEIVED, (data: { username: string; giftName: string; giftValue: number }) => processGift(data.username, data.giftName, data.giftValue));
 
   socket.on(WS_EVENTS.TIKTOK_CONNECT, (data: { username: string }) => {
-    io.emit(WS_EVENTS.TIKTOK_STATUS, { status: "CONNECTING..." });
-    try {
-      // ✅ v8.18b: grace mula SEBELUM connect (backlog masuk masa connecting lagi)
-      tiktokConnectTime = Date.now();
-      tiktok.connect(data.username, {
-        onComment: processComment,
-        onGift: processGift,
-        onLike: (n: number) => { likeTimes.push(Date.now()); liveStats.totalLikes += n; },
-        onViewer: (v: number) => { liveStats.viewers = v; },
-        onStatus: (s) => {
-          console.log(`[TikTok] status -> ${s}`);
-          io.emit(WS_EVENTS.TIKTOK_STATUS, { status: s });
-        },
-        onJoin: (u) => handleJoin(u),
-      });
-      let tries = 0;
-      const poll = setInterval(() => {
-        tries++;
-        if (tiktok.connected) {
-          clearInterval(poll);
-          tiktokConnectTime = Date.now();
-          songQueue = [];
-          songPlaying = false;
-          currentlyPlayingQ = "";
-          emitSongQueue();
-          io.emit("music:status", { state: "STOPPED" });
-          console.log("[TikTok] CONNECTED | backlog grace 8s + music queue cleared");
-          io.emit(WS_EVENTS.TIKTOK_STATUS, { status: "CONNECTED" });
-        } else if (tries > 30) {
-          clearInterval(poll);
-        }
-      }, 1000);
-    } catch (e: any) {
-      console.error("[TikTok] connect error:", (e && e.message) || e);
-      io.emit(WS_EVENTS.TIKTOK_STATUS, { status: "DISCONNECTED" });
-    }
+    const uname = String((data && data.username) || "").replace("@", "").trim();
+    if (!uname) return;
+    lastTikTokUser = uname;
+    reconnectFails = 0;
+    try { fs.writeFileSync(lastUserFile, uname); } catch (e) {}
+    doTikTokConnect(uname);
   });
-  socket.on(WS_EVENTS.TIKTOK_DISCONNECT, () => { tiktok.disconnect(); io.emit(WS_EVENTS.TIKTOK_STATUS, { status: "DISCONNECTED" }); });
+  socket.on(WS_EVENTS.TIKTOK_DISCONNECT, () => {
+    lastTikTokUser = null;
+    reconnectFails = 0;
+    try { fs.unlinkSync(lastUserFile); } catch (e) {}
+    tiktok.disconnect();
+    io.emit(WS_EVENTS.TIKTOK_STATUS, { status: "DISCONNECTED" });
+  });
 
   socket.on("autoTap:toggle", (data: any) => {
     autoTapEnabled = data.enabled || false;
@@ -785,6 +841,10 @@ io.on("connection", (socket) => {
     currentlyPlayingQ = String(d?.q || "").toLowerCase();
     console.log("[MUSIC] sync frontend playing:", currentlyPlayingQ);
   });
+
+  // ✅ relay tick + offset calibration ke lyrics server
+  socket.on("music:tick", (d: any) => io.emit("music:tick", d));
+  socket.on("lyrics:offset", (d: any) => io.emit("lyrics:offset", d));
 
   socket.on("music:play", (d: any) => { const q = String((d && d.q) || "").trim(); if (q) void enqueueSong(q, "host"); });
   socket.on("music:skip", () => skipCurrentSong());
