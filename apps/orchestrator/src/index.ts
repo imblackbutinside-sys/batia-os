@@ -22,7 +22,7 @@ const policyPath = path.resolve(__dirname, "../../../policies/tiktok_my_2026.yam
 const engine = new LiveContextEngine(new PolicyEngine(policyPath));
 
 console.log("[EVENTS] WS_EVENTS =", JSON.stringify(WS_EVENTS));
-console.log("[BUILD] BATIA v8.45 - emit STOPPED bila lagu tamat natural");
+console.log("[BUILD] BATIA v8.53 - padam audio selepas play (storage-safe, behavior asal)");
 
 try {
   const audioDir = path.join(process.cwd(), "audio");
@@ -415,6 +415,27 @@ function saveCache() {
     fs.writeFileSync(cacheFile, JSON.stringify(obj));
   } catch (e) {}
 }
+
+// ✅ v8.53: helper padam audio selepas play (behavior asal, storage-safe)
+function songFileCacheDelete(filename: string) {
+  for (const [k, v] of songFileCache.entries()) {
+    if (v.filename === filename) songFileCache.delete(k);
+  }
+  saveCache();
+}
+
+function deleteCurrentMusic() {
+  if (currentMusicFile && fs.existsSync(currentMusicFile)) {
+    try {
+      const fn = path.basename(currentMusicFile);
+      fs.unlinkSync(currentMusicFile);
+      songFileCacheDelete(fn);
+      console.log(`[MUSIC] 🗑️ Padam audio selepas play: ${fn}`);
+    } catch (e) {}
+  }
+  currentMusicFile = null;
+}
+
 loadCache();
 
 function findCachedSong(title: string): string | null {
@@ -515,7 +536,8 @@ function emitSongQueue() { io.emit("music:queue", songQueue); }
 
 function skipCurrentSong() {
   if (!songPlaying && songQueue.length === 0) return;
-  currentMusicFile = null; songPlaying = false; currentlyPlayingQ = "";
+  deleteCurrentMusic();
+  songPlaying = false; currentlyPlayingQ = "";
   io.emit("music:status", { state: "SKIPPED" });
   if (songQueue.length > 0) setTimeout(() => void playNextInQueue(), 300);
 }
@@ -842,7 +864,7 @@ io.on("connection", (socket) => {
     console.log("[MUSIC] sync frontend playing:", currentlyPlayingQ);
   });
 
-  // ✅ relay tick + offset calibration ke lyrics server
+  // relay tick + offset calibration ke lyrics server
   socket.on("music:tick", (d: any) => io.emit("music:tick", d));
   socket.on("lyrics:offset", (d: any) => io.emit("lyrics:offset", d));
 
@@ -850,7 +872,8 @@ io.on("connection", (socket) => {
   socket.on("music:skip", () => skipCurrentSong());
   socket.on("music:stop", () => {
     console.log("[MUSIC] Stop received - hentikan serta-merta");
-    currentMusicFile = null; songPlaying = false; currentlyPlayingQ = "";
+    deleteCurrentMusic();
+    songPlaying = false; currentlyPlayingQ = "";
     emitSongQueue();
     io.emit("music:status", { state: "STOPPED" });
     if (songQueue.length > 0) setTimeout(() => void playNextInQueue(), 500);
@@ -873,6 +896,7 @@ io.on("connection", (socket) => {
   socket.on("music:unduck", () => io.emit("music:volume", { vol: musicVolume }));
   socket.on("music:ended", () => {
     if (!songPlaying) return;
+    deleteCurrentMusic();
     songPlaying = false; currentlyPlayingQ = "";
     // ✅ v8.45: bagitahu lyrics server lagu dah habis (kalau tiada next dalam queue)
     if (songQueue.length === 0) {
