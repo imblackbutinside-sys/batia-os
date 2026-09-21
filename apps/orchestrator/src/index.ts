@@ -22,7 +22,7 @@ const policyPath = path.resolve(__dirname, "../../../policies/tiktok_my_2026.yam
 const engine = new LiveContextEngine(new PolicyEngine(policyPath));
 
 console.log("[EVENTS] WS_EVENTS =", JSON.stringify(WS_EVENTS));
-console.log("[BUILD] BATIA v8.53 - padam audio selepas play (storage-safe, behavior asal)");
+console.log("[BUILD] BATIA v8.61 - CORS header untuk /music/ (lead-in detector berfungsi)");
 
 try {
   const audioDir = path.join(process.cwd(), "audio");
@@ -588,6 +588,7 @@ async function enqueueSong(q: string, by: string) {
   if (!songPlaying) void playNextInQueue();
 }
 
+// ✅ v8.61: CORS header ditambah supaya dashboard boleh fetch audio untuk lead-in detection
 httpServer.on("request", (req, res) => {
   const serve = (dir: string) => {
     const file = path.join(dir, path.basename(req.url || ""));
@@ -600,10 +601,10 @@ httpServer.on("request", (req, res) => {
         const parts = range.replace(/bytes=/, "").split("-");
         const start = parseInt(parts[0], 10) || 0;
         const end = parts[1] ? parseInt(parts[1], 10) : stat.size - 1;
-        res.writeHead(206, { "Content-Range": `bytes ${start}-${end}/${stat.size}`, "Accept-Ranges": "bytes", "Content-Length": end - start + 1, "Content-Type": mime });
+        res.writeHead(206, { "Content-Range": `bytes ${start}-${end}/${stat.size}`, "Accept-Ranges": "bytes", "Content-Length": end - start + 1, "Content-Type": mime, "Access-Control-Allow-Origin": "*" });
         fs.createReadStream(file, { start, end }).pipe(res);
       } else {
-        res.writeHead(200, { "Content-Length": stat.size, "Content-Type": mime, "Accept-Ranges": "bytes" });
+        res.writeHead(200, { "Content-Length": stat.size, "Content-Type": mime, "Accept-Ranges": "bytes", "Access-Control-Allow-Origin": "*" });
         fs.createReadStream(file).pipe(res);
       }
       return true;

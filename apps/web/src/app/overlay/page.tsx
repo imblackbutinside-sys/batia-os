@@ -8,7 +8,33 @@ const socket: any = typeof window !== "undefined"
   ? io(window.location.protocol + "//" + window.location.hostname + ":4000")
   : null;
 
-type Line = { a: number; b: number; text: string };
+// ✅ v8.61: lead-in detector (module-scope, tak perlu ref)
+const leadinDoneSet = new Set<string>();
+async function detectLeadIn(url: string, vid: string, sock: any) {
+  if (leadinDoneSet.has(vid)) return;
+  leadinDoneSet.add(vid);
+  try {
+    const resp = await fetch(url);
+    const buf = await resp.arrayBuffer();
+    const AC = (window as any).AudioContext || (window as any).webkitAudioContext;
+    const ctx = new AC();
+    const ad = await ctx.decodeAudioData(buf);
+    const ch = ad.getChannelData(0);
+    const sr = ad.sampleRate;
+    const step = Math.max(1, Math.floor(sr / 100));
+    const limit = Math.min(ch.length, sr * 30);
+    let first = 0;
+    for (let i = 0; i < limit; i += step) {
+      if (Math.abs(ch[i]) > 0.02) { first = i; break; }
+    }
+    ctx.close();
+    const ms = Math.round((first / sr) * 1000);
+    console.log("[MUSIC-WEB] lead-in detected:", ms + "ms");
+    sock.emit("music:leadin", { videoId: vid, ms });
+  } catch (e: any) {
+    console.log("[MUSIC-WEB] lead-in detect FAILED:", e?.message || e);
+  }
+}
 
 export default function Dashboard() {
   const [mode, setMode] = useState("REGULAR");
@@ -36,7 +62,6 @@ export default function Dashboard() {
 
   const musicAudio = useRef<HTMLAudioElement | null>(null);
   const tickInterval = useRef<any>(null);
-  const leadinDone = useRef<Record<string, boolean>>({});
   const volumeRef = useRef(1.0);
   const soundOnRef = useRef(true);
 
@@ -73,19 +98,21 @@ export default function Dashboard() {
     socket.on("music:unduck", () => { if (musicAudio.current) musicAudio.current.volume = volumeRef.current; });
 
     socket.on("music:status", (d: any) => {
+      console.log("[MUSIC-WEB] state:", d.state, "| url:", d.url);
       setMusicStatus(d.state + (d.q ? ": " + d.q : ""));
       const a = musicAudio.current;
       if (!a) return;
       if (d.state === "PLAYING" && d.url) {
-        const mpath = String(d.url);
-        const idm = mpath.match(/\/music\/([^/?#]+)\./);
-        const vid = idm ? idm[1] : "";
+        const vidM = String(d.url).match(/\/music\/([^/?#]+)\./);
+        const vid = vidM ? vidM[1] : "";
         a.src = d.url;
         a.volume = volumeRef.current;
         setCurrentSong(d.q || "");
         a.onended = () => { socket.emit("music:ended", {}); };
         a.play().then(() => {
           socket.emit("music:started", { q: d.q });
+          // ✅ v8.61: auto-detect intro silence untuk sync lirik
+          if (vid) detectLeadIn(d.url, vid, socket);
         }).catch((e) => console.log("[WEB] play blocked:", e));
         if (tickInterval.current) clearInterval(tickInterval.current);
         tickInterval.current = setInterval(() => {
@@ -93,31 +120,6 @@ export default function Dashboard() {
             socket.emit("music:tick", { elapsed: musicAudio.current.currentTime * 1000 });
           }
         }, 500);
-        // ✅ v8.59: detect lead-in silence (intro sebelum muzik) untuk sync lirik LRCLIB
-        if (vid && !leadinDone.current[vid]) {
-          leadinDone.current[vid] = true;
-          (async () => {
-            try {
-              const resp = await fetch(d.url);
-              const buf = await resp.arrayBuffer();
-              const AC = (window as any).AudioContext || (window as any).webkitAudioContext;
-              const ctx = new AC();
-              const ad = await ctx.decodeAudioData(buf);
-              const ch = ad.getChannelData(0);
-              const sr = ad.sampleRate;
-              const step = Math.max(1, Math.floor(sr / 100));
-              const limit = Math.min(ch.length, sr * 30);
-              let first = 0;
-              for (let i = 0; i < limit; i += step) {
-                if (Math.abs(ch[i]) > 0.02) { first = i; break; }
-              }
-              ctx.close();
-              const ms = Math.round((first / sr) * 1000);
-              console.log("[MUSIC-WEB] lead-in detected:", ms + "ms");
-              socket.emit("music:leadin", { videoId: vid, ms });
-            } catch (e) {}
-          })();
-        }
       }
       if (d.state === "PAUSED") a.pause();
       if (d.state === "RESUMED") a.play().catch(() => {});
