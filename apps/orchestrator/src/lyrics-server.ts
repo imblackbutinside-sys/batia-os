@@ -1,5 +1,5 @@
-// ✅ BATIA Lyrics Server v8.59 - port 4002
-// FIX: lead-in compensation restore (lirik LRCLIB tolak intro silence)
+// ✅ BATIA Lyrics Server v8.60 - port 4002
+// FIX: fast path require exact match (elak false positive "Kau Yang Satu Wow")
 import http from "http";
 import path from "path";
 import fs from "fs";
@@ -10,7 +10,7 @@ import { Server as SocketServer } from "socket.io";
 import dotenv from "dotenv";
 const execFileAsync = promisify(execFile);
 
-const SERVER_VERSION = "8.59";
+const SERVER_VERSION = "8.60";
 const __dirname = path.dirname(new URL(import.meta.url).pathname).replace(/^\/([A-Z]:)/, "$1");
 dotenv.config({ path: path.resolve(__dirname, "../.env") });
 const LYRICS_PORT = 4002;
@@ -260,7 +260,7 @@ async function lrclibGetExact(track: string, artist: string, durationSec: number
   if (!track || !artist || !durationSec) return null;
   try {
     const url = `https://lrclib.net/api/get?track_name=${encodeURIComponent(track)}&artist_name=${encodeURIComponent(artist)}&duration=${durationSec}`;
-    const res = await fetchWithRetry(url, { headers: { "User-Agent": "BATIA-OS/8.59" } }, "LRCLIB-GET", 8000, 3);
+    const res = await fetchWithRetry(url, { headers: { "User-Agent": "BATIA-OS/8.60" } }, "LRCLIB-GET", 8000, 3);
     if (!res.ok) return null;
     const x: any = await res.json();
     if (!x) return null;
@@ -282,9 +282,10 @@ async function lrclibGetExact(track: string, artist: string, durationSec: number
   } catch (e: any) { return null; }
 }
 
-async function lrclibSearch(query: string, guess: string, videoDurationSec: number, expectedArtist: string, minScore = 2): Promise<Line[]> {
+// ✅ v8.60: tambah parameter requireExact untuk fast path
+async function lrclibSearch(query: string, guess: string, videoDurationSec: number, expectedArtist: string, minScore = 2, requireExact = false): Promise<Line[]> {
   try {
-    const res = await fetchWithRetry("https://lrclib.net/api/search?q=" + encodeURIComponent(query), { headers: { "User-Agent": "BATIA-OS/8.59" } }, "LRCLIB", 8000, 3);
+    const res = await fetchWithRetry("https://lrclib.net/api/search?q=" + encodeURIComponent(query), { headers: { "User-Agent": "BATIA-OS/8.60" } }, "LRCLIB", 8000, 3);
     if (!res.ok) { console.log(`[LYRICS] ⚠️ LRCLIB: HTTP ${res.status}`); return []; }
     const arr: any[] = await res.json();
     if (!Array.isArray(arr) || arr.length === 0) return [];
@@ -303,6 +304,8 @@ async function lrclibSearch(query: string, guess: string, videoDurationSec: numb
       else if (nq.includes(nt) && nt.length >= 3) score = 3;
       else if (nt.includes(nq) && nq.length >= 6) score = 2;
       else continue;
+      // ✅ v8.60: FAST PATH mesti exact match — elak false positive
+      if (requireExact && score < 4) continue;
       if (nExpected && nExpected.length > 3) {
         const artistTokens = nExpected.split(" ").filter((t) => t.length > 2);
         if (!artistTokens.some((t) => na.includes(t))) continue;
@@ -337,7 +340,7 @@ async function fetchLyrist(artist: string, title: string, guess: string): Promis
   if (!title) return null;
   try {
     const q = artist ? `${title} ${artist}` : title;
-    const res = await fetchWithRetry(`https://lyrist.vercel.app/api/${encodeURIComponent(q)}`, { headers: { "User-Agent": "BATIA-OS/8.59" } }, "Lyrist", 8000, 2);
+    const res = await fetchWithRetry(`https://lyrist.vercel.app/api/${encodeURIComponent(q)}`, { headers: { "User-Agent": "BATIA-OS/8.60" } }, "Lyrist", 8000, 2);
     if (!res.ok) return null;
     const data: any = await res.json();
     if (!data.lyrics) return null;
@@ -451,7 +454,8 @@ async function loadLyrics(videoId: string, dashboardQuery: string) {
   };
 
   let guess: "ms" | "en" | "?" = textLang(dashboardQuery);
-  const fast = await lrclibSearch(dashboardQuery, guess, 0, "", 3);
+  // ✅ v8.60: fast path require exact match (elak false positive)
+  const fast = await lrclibSearch(dashboardQuery, guess, 0, "", 3, true);
   if (fast.length > 0 && alive()) { finish(fast, "LRCLIB", guess); console.log(`[LYRICS] ⚡ FAST PATH hit`); return; }
   if (!alive()) return;
 
@@ -542,7 +546,7 @@ socket.on("music:tick", (d: any) => {
 socket.on("music:leadin", (d: any) => {
   if (!current || !d || current.videoId !== d.videoId) return;
   current.leadIn = Math.max(0, Math.min(15000, Number(d.ms) || 0));
-  console.log(`[LYRICS] ⏱️ Lead-in diterima: ${current.leadIn}ms (akan tolak dari elapsed untuk LRCLIB)`);
+  console.log(`[LYRICS] ⏱️ Lead-in diterima: ${current.leadIn}ms`);
 });
 socket.on("lyrics:offset", (d: any) => {
   if (!current) return;
@@ -559,7 +563,6 @@ function computePayload(): any {
   if (tickFresh && current.frontendElapsed !== undefined) elapsed = current.frontendElapsed;
   else if (current.pausedAt) elapsed = current.frontendElapsed ?? (current.pausedAt - current.t0);
   else elapsed = now - current.t0;
-  // ✅ v8.59: LEAD-IN COMPENSATION RESTORE - lirik LRCLIB tolak intro silence file YouTube
   const lead = current.source === "LRCLIB" ? (current.leadIn || 0) : 0;
   elapsed = Math.max(0, elapsed - LYRICS_OFFSET_MS - (current.offsetMs || 0) - lead);
   let prev: Line | null = null;
