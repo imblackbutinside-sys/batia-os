@@ -1,5 +1,5 @@
-// ✅ BATIA Lyrics Server v8.60 - port 4002
-// FIX: fast path require exact match (elak false positive "Kau Yang Satu Wow")
+// ✅ BATIA Lyrics Server v8.62 - port 4002
+// Cache LIRIK sahaja (JSON kecil) - audio tetap auto-padam. Retry LRCLIB kuat.
 import http from "http";
 import path from "path";
 import fs from "fs";
@@ -10,13 +10,15 @@ import { Server as SocketServer } from "socket.io";
 import dotenv from "dotenv";
 const execFileAsync = promisify(execFile);
 
-const SERVER_VERSION = "8.60";
+const SERVER_VERSION = "8.62";
 const __dirname = path.dirname(new URL(import.meta.url).pathname).replace(/^\/([A-Z]:)/, "$1");
 dotenv.config({ path: path.resolve(__dirname, "../.env") });
 const LYRICS_PORT = 4002;
 const LYRICS_OFFSET_MS = parseInt(process.env.LYRICS_OFFSET_MS || "0", 10);
 const toolsDir = path.resolve(__dirname, "../../../tools");
 const musicDir = path.resolve(__dirname, "../audio/music");
+const lyricsDir = path.join(musicDir, "lyrics");
+try { fs.mkdirSync(lyricsDir, { recursive: true }); } catch (e) {}
 const ytdlp = fs.existsSync(path.join(toolsDir, "yt-dlp.exe")) ? path.join(toolsDir, "yt-dlp.exe") : "yt-dlp";
 const cookiesPath = path.join(toolsDir, "cookies.txt");
 
@@ -32,6 +34,7 @@ type SongState = {
 
 let current: SongState | null = null;
 console.log("[LYRICS] 🎤 Lyrics server v" + SERVER_VERSION + " - port", LYRICS_PORT);
+console.log("[LYRICS] 💾 Cache: LIRIK sahaja (JSON kecil) | audio auto-padam");
 
 const HALLUCINATION_RE = /\b(thanks? for (watching|listening|viewing)|thank you for (watching|listening|viewing)|terima kasih (telah|kerana|sudah) (menonton|mendengar|menyokong)|please (like|subscribe|share|follow)|subscribe to (my|our) channel|like and subscribe|subtitles? by|captions? by|transcribed by|amara\.org|everything will be (fine|okay|ok|alright)|stay in the heart|in the cool|i('?m)? not a fool|you('?re)? not a fool|don'?t be afraid|see you (next time|soon)|until next time|have a nice day|good luck|www\.|https?:\/\/|please turn on|turn on (the )?(subtitles|captions)|^thank you\.?$|^thanks\.?$|^bye\.?$|^goodbye\.?$|^see you\.?$|^take care\.?$|^that'?s all\.?$|^the end\.?$|^ah ah ah|^oh oh oh|^la la la|^na na na)\b/i;
 
@@ -146,6 +149,13 @@ function alignText(whisperLines: Line[], plainLines: string[]): { lines: Line[];
   return { lines: out, replaced };
 }
 
+// ✅ v8.62: cache LIRIK (kecil) - simpan & baca
+function saveLyricsCache(videoId: string, data: { lines: Line[]; offsetMs: number; leadIn: number; source: string; lang: string }) {
+  try {
+    fs.writeFileSync(path.join(lyricsDir, videoId + ".json"), JSON.stringify({ v: 1, ...data }));
+  } catch (e) {}
+}
+
 function parseArtistTitle(raw: string, channel: string): { artist: string; title: string } {
   let t = raw
     .replace(/\([^)]*\)/g, " ")
@@ -182,20 +192,20 @@ async function fetchVideoMeta(videoId: string): Promise<VideoMeta | null> {
   } catch (e: any) { return null; }
 }
 
-async function fetchWithRetry(url: string, options: RequestInit, label: string, timeoutMs = 10000, maxRetries = 3): Promise<Response> {
+async function fetchWithRetry(url: string, options: RequestInit, label: string, timeoutMs = 10000, maxRetries = 4): Promise<Response> {
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
       const res = await fetch(url, { ...options, signal: AbortSignal.timeout(timeoutMs) });
       if ((res.status === 503 || res.status === 502 || res.status === 429) && attempt < maxRetries) {
-        const delay = Math.min(1000 * Math.pow(2, attempt - 1), 5000);
-        console.log(`[LYRICS] ⏳ ${label}: HTTP ${res.status} - retry ${attempt}/${maxRetries}...`);
+        const delay = Math.min(1000 * attempt, 4000);
+        console.log(`[LYRICS] ⏳ ${label}: HTTP ${res.status} - retry ${attempt}/${maxRetries} (${delay}ms)...`);
         await new Promise((r) => setTimeout(r, delay));
         continue;
       }
       return res;
     } catch (e: any) {
       if (attempt < maxRetries) {
-        const delay = Math.min(1000 * Math.pow(2, attempt - 1), 5000);
+        const delay = Math.min(1000 * attempt, 4000);
         await new Promise((r) => setTimeout(r, delay));
       } else throw e;
     }
@@ -221,7 +231,7 @@ function extractCaptionTracks(html: string): any[] | null {
 
 async function fetchYouTubeTranscript(videoId: string, preferredLang: "ms" | "en" | "?"): Promise<Line[] | null> {
   try {
-    const pageRes = await fetchWithRetry(`https://www.youtube.com/watch?v=${videoId}`, { headers: { "User-Agent": "Mozilla/5.0" } }, "YT-page", 8000);
+    const pageRes = await fetchWithRetry(`https://www.youtube.com/watch?v=${videoId}`, { headers: { "User-Agent": "Mozilla/5.0" } }, "YT-page", 8000, 2);
     if (!pageRes.ok) return null;
     const html = await pageRes.text();
     const tracks = extractCaptionTracks(html);
@@ -234,7 +244,7 @@ async function fetchYouTubeTranscript(videoId: string, preferredLang: "ms" | "en
     let captionUrl = chosen?.baseUrl;
     if (!captionUrl) return null;
     captionUrl = captionUrl.replace(/\\u0026/g, "&").replace(/&amp;/g, "&");
-    const capRes = await fetchWithRetry(captionUrl + "&fmt=json3", {}, "YT-captions", 8000);
+    const capRes = await fetchWithRetry(captionUrl + "&fmt=json3", {}, "YT-captions", 8000, 2);
     if (!capRes.ok) return null;
     const data = await capRes.json();
     const events: any[] = data.events || [];
@@ -260,7 +270,7 @@ async function lrclibGetExact(track: string, artist: string, durationSec: number
   if (!track || !artist || !durationSec) return null;
   try {
     const url = `https://lrclib.net/api/get?track_name=${encodeURIComponent(track)}&artist_name=${encodeURIComponent(artist)}&duration=${durationSec}`;
-    const res = await fetchWithRetry(url, { headers: { "User-Agent": "BATIA-OS/8.60" } }, "LRCLIB-GET", 8000, 3);
+    const res = await fetchWithRetry(url, { headers: { "User-Agent": "BATIA-OS/8.62" } }, "LRCLIB-GET", 8000, 4);
     if (!res.ok) return null;
     const x: any = await res.json();
     if (!x) return null;
@@ -271,21 +281,13 @@ async function lrclibGetExact(track: string, artist: string, durationSec: number
       const lines = parseLrc(String(x.syncedLyrics));
       if (lines.length > 0) { console.log(`[LYRICS] ✅ LRCLIB GET: ${lines.length} baris`); return lines; }
     }
-    if (x.plainLyrics) {
-      const plainLines = String(x.plainLyrics).split("\n").map((s) => cleanLine(s)).filter((s) => s.length > 0 && !isBadLine(s));
-      if (plainLines.length >= 5) {
-        const perLine = Math.max(3000, (durationSec * 1000) / plainLines.length);
-        return ensureWords(plainLines.map((text, i) => ({ a: i * perLine, b: (i + 1) * perLine, text, words: [] })));
-      }
-    }
     return null;
   } catch (e: any) { return null; }
 }
 
-// ✅ v8.60: tambah parameter requireExact untuk fast path
 async function lrclibSearch(query: string, guess: string, videoDurationSec: number, expectedArtist: string, minScore = 2, requireExact = false): Promise<Line[]> {
   try {
-    const res = await fetchWithRetry("https://lrclib.net/api/search?q=" + encodeURIComponent(query), { headers: { "User-Agent": "BATIA-OS/8.60" } }, "LRCLIB", 8000, 3);
+    const res = await fetchWithRetry("https://lrclib.net/api/search?q=" + encodeURIComponent(query), { headers: { "User-Agent": "BATIA-OS/8.62" } }, "LRCLIB", 8000, 4);
     if (!res.ok) { console.log(`[LYRICS] ⚠️ LRCLIB: HTTP ${res.status}`); return []; }
     const arr: any[] = await res.json();
     if (!Array.isArray(arr) || arr.length === 0) return [];
@@ -304,7 +306,6 @@ async function lrclibSearch(query: string, guess: string, videoDurationSec: numb
       else if (nq.includes(nt) && nt.length >= 3) score = 3;
       else if (nt.includes(nq) && nq.length >= 6) score = 2;
       else continue;
-      // ✅ v8.60: FAST PATH mesti exact match — elak false positive
       if (requireExact && score < 4) continue;
       if (nExpected && nExpected.length > 3) {
         const artistTokens = nExpected.split(" ").filter((t) => t.length > 2);
@@ -325,13 +326,6 @@ async function lrclibSearch(query: string, guess: string, videoDurationSec: numb
       const lines = parseLrc(String(best.syncedLyrics));
       if (lines.length > 0) { console.log(`[LYRICS] ✅ LRCLIB: "${best.trackName}" - ${best.artistName}`); return lines; }
     }
-    if (best.plainLyrics) {
-      const plainLines = String(best.plainLyrics).split("\n").map((s) => cleanLine(s)).filter((s) => s.length > 0 && !isBadLine(s));
-      if (plainLines.length >= 5) {
-        const perLine = Math.max(3000, ((best.duration || 240) * 1000) / plainLines.length);
-        return ensureWords(plainLines.map((text, i) => ({ a: i * perLine, b: (i + 1) * perLine, text, words: [] })));
-      }
-    }
     return [];
   } catch (e: any) { return []; }
 }
@@ -340,7 +334,7 @@ async function fetchLyrist(artist: string, title: string, guess: string): Promis
   if (!title) return null;
   try {
     const q = artist ? `${title} ${artist}` : title;
-    const res = await fetchWithRetry(`https://lyrist.vercel.app/api/${encodeURIComponent(q)}`, { headers: { "User-Agent": "BATIA-OS/8.60" } }, "Lyrist", 8000, 2);
+    const res = await fetchWithRetry(`https://lyrist.vercel.app/api/${encodeURIComponent(q)}`, { headers: { "User-Agent": "BATIA-OS/8.62" } }, "Lyrist", 8000, 2);
     if (!res.ok) return null;
     const data: any = await res.json();
     if (!data.lyrics) return null;
@@ -447,16 +441,37 @@ async function loadLyrics(videoId: string, dashboardQuery: string) {
   if (!videoId) { if (current) current.loading = false; return; }
   const myId = videoId;
   const alive = () => current !== null && current.videoId === myId;
-  const finish = (lines: Line[], source: string, lang: string) => {
+  const finish = (lines: Line[], source: string, lang: string, save: boolean) => {
     if (!alive()) return;
     current!.lines = lines; current!.hasLyrics = lines.length > 0;
     current!.loading = false; current!.source = source; current!.lang = lang;
+    if (save && lines.length > 0) {
+      saveLyricsCache(videoId, { lines, offsetMs: current!.offsetMs, leadIn: current!.leadIn, source, lang });
+    }
   };
 
+  // ========== PHASE 0: CACHE LIRIK (INSTANT, tiada network) ==========
+  try {
+    const cf = path.join(lyricsDir, videoId + ".json");
+    if (fs.existsSync(cf)) {
+      const raw = JSON.parse(fs.readFileSync(cf, "utf8"));
+      const cachedLines: Line[] = Array.isArray(raw.lines) ? raw.lines : [];
+      const cleaned = ensureWords(cachedLines.filter((l) => !isBadLine(l.text)));
+      if (!isInsufficientLyrics(cleaned)) {
+        if (alive()) {
+          current!.offsetMs = raw.offsetMs || 0;
+          current!.leadIn = raw.leadIn || 0;
+          finish(cleaned, raw.source || "CACHE", raw.lang || "?", false);
+          console.log(`[LYRICS] ⚡ CACHE lirik hit: ${cleaned.length} baris (src ${raw.source}) - INSTANT`);
+        }
+        return;
+      }
+    }
+  } catch (e) {}
+
   let guess: "ms" | "en" | "?" = textLang(dashboardQuery);
-  // ✅ v8.60: fast path require exact match (elak false positive)
   const fast = await lrclibSearch(dashboardQuery, guess, 0, "", 3, true);
-  if (fast.length > 0 && alive()) { finish(fast, "LRCLIB", guess); console.log(`[LYRICS] ⚡ FAST PATH hit`); return; }
+  if (fast.length > 0 && alive()) { finish(fast, "LRCLIB", guess, true); console.log(`[LYRICS] ⚡ FAST PATH hit`); return; }
   if (!alive()) return;
 
   const [ytLines, meta] = await Promise.all([fetchYouTubeTranscript(videoId, guess), fetchVideoMeta(videoId)]);
@@ -471,12 +486,12 @@ async function loadLyrics(videoId: string, dashboardQuery: string) {
 
   if (ytLines && ytLines.length > 0) {
     const filtered = guess !== "?" ? filterLinesByLang(ytLines, guess) : ytLines;
-    if (!isInsufficientLyrics(filtered)) { finish(filtered, "YT-TRANSCRIPT", guess); return; }
+    if (!isInsufficientLyrics(filtered)) { finish(filtered, "YT-TRANSCRIPT", guess, true); return; }
   }
 
   if (artist && title && videoDuration > 0) {
     const got = await lrclibGetExact(title, artist, videoDuration, guess);
-    if (got && got.length > 0 && alive()) { finish(got, "LRCLIB", guess); return; }
+    if (got && got.length > 0 && alive()) { finish(got, "LRCLIB", guess, true); return; }
   }
   if (!alive()) return;
 
@@ -486,7 +501,7 @@ async function loadLyrics(videoId: string, dashboardQuery: string) {
   for (const q of queries) {
     if (!alive()) return;
     const got = await lrclibSearch(q, guess, videoDuration, artist, 2);
-    if (got.length > 0) { finish(got, "LRCLIB", guess); return; }
+    if (got.length > 0) { finish(got, "LRCLIB", guess, true); return; }
   }
   if (!alive()) return;
 
@@ -500,7 +515,7 @@ async function loadLyrics(videoId: string, dashboardQuery: string) {
       const { lines: fixed, replaced } = alignText(whisperLines, plainLines);
       if (replaced > 0) { console.log(`[LYRICS] 🔧 Text-replacement: ${replaced} baris`); finalLines = ensureWords(fixed); }
     }
-    finish(finalLines, "WHISPER", guess);
+    finish(finalLines, "WHISPER", guess, true);
     return;
   }
 
@@ -508,12 +523,12 @@ async function loadLyrics(videoId: string, dashboardQuery: string) {
     const plainLines = lyristPlain.split("\n").map((s) => cleanLine(s)).filter((s) => s.length > 0);
     if (plainLines.length >= 5) {
       const perLine = Math.max(3000, (videoDuration * 1000) / plainLines.length);
-      finish(ensureWords(plainLines.map((text, i) => ({ a: i * perLine, b: (i + 1) * perLine, text, words: [] }))), "LYRIST", guess);
+      finish(ensureWords(plainLines.map((text, i) => ({ a: i * perLine, b: (i + 1) * perLine, text, words: [] }))), "LYRIST", guess, true);
       return;
     }
   }
 
-  finish([], "", guess);
+  finish([], "", guess, false);
   console.log(`[LYRICS] ❌ Tiada lirik untuk ${videoId}`);
 }
 
@@ -547,12 +562,14 @@ socket.on("music:leadin", (d: any) => {
   if (!current || !d || current.videoId !== d.videoId) return;
   current.leadIn = Math.max(0, Math.min(15000, Number(d.ms) || 0));
   console.log(`[LYRICS] ⏱️ Lead-in diterima: ${current.leadIn}ms`);
+  if (current.lines.length > 0) saveLyricsCache(current.videoId, { lines: current.lines, offsetMs: current.offsetMs, leadIn: current.leadIn, source: current.source, lang: current.lang });
 });
 socket.on("lyrics:offset", (d: any) => {
   if (!current) return;
   const delta = Number(d && d.delta) || 0;
   current.offsetMs = (current.offsetMs || 0) + delta;
   console.log(`[LYRICS] ⚙️ Offset: ${current.offsetMs > 0 ? "+" : ""}${current.offsetMs}ms`);
+  if (current.lines.length > 0) saveLyricsCache(current.videoId, { lines: current.lines, offsetMs: current.offsetMs, leadIn: current.leadIn, source: current.source, lang: current.lang });
 });
 
 function computePayload(): any {
