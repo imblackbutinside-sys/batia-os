@@ -1,10 +1,12 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import QuickControls from "./components/QuickControls";
+import EffectsManager from "./components/EffectsManager";
 
-// ✅ BATIA OS root layout v8.63
+// ✅ BATIA OS root layout v8.64
 // - dark theme restore (body gelap + scrollbar gelap)
-// - QuickControls floating bar (Skip + lirik cepat/lambat) - dashboard sahaja
+// - QuickControls floating bar (Skip + lirik cepat/lambat)
+// - EffectsManager floating panel (drag&drop video gift)
 export const metadata: Metadata = {
   title: "BATIA OS",
   description: "AI Host Orchestrator untuk TikTok Live Malaysia",
@@ -46,8 +48,8 @@ export default function RootLayout({
           button { font-family: inherit; }
         `}</style>
         {children}
-        {/* ✅ QuickControls hanya mount pada pathname "/" (dashboard) */}
         <QuickControls />
+        <EffectsManager />
       </body>
     </html>
   );

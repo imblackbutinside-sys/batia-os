@@ -1,24 +1,40 @@
 interface AIProvider { name: string; baseURL: string; apiKey: string; models: string[] }
 
 const providers: Record<string, AIProvider> = {
-  qwen: { name: "Qwen-Max", baseURL: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", apiKey: process.env.DASHSCOPE_API_KEY || "", models: ["qwen-max-latest"] },
+  qwen: {
+    name: "Qwen-Max",
+    baseURL: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+    apiKey: process.env.DASHSCOPE_API_KEY || "",
+    models: ["qwen-max-latest"],
+  },
   groq: {
     name: "Groq",
     baseURL: "https://api.groq.com/openai/v1",
     apiKey: process.env.GROQ_API_KEY || "",
-    models: [
-      "groq/compound-mini",
-      "groq/compound",
-      "openai/gpt-oss-20b",
-      "qwen/qwen3.8-27b",
-      "qwen/qwen3.6-27b"
-    ]
+    // ✅ v8.17a: models wujud dalam /models output (tiada lagi groq/compound)
+    models: ["openai/gpt-oss-20b", "qwen/qwen3.8-27b"],
   },
-  gemini: { name: "Gemini", baseURL: "https://generativelanguage.googleapis.com/v1beta/openai", apiKey: process.env.GEMINI_API_KEY || "", models: ["gemini-1.5-flash"] },
-  openrouter: { name: "OpenRouter", baseURL: "https://openrouter.ai/api/v1", apiKey: process.env.OPENROUTER_API_KEY || "", models: ["meta-llama/llama-3.3-70b-instruct:free"] },
+  gemini: {
+    name: "Gemini",
+    baseURL: "https://generativelanguage.googleapis.com/v1beta/openai",
+    apiKey: process.env.GEMINI_API_KEY || "",
+    models: ["gemini-1.5-flash"],
+  },
+  openrouter: {
+    name: "OpenRouter",
+    baseURL: "https://openrouter.ai/api/v1",
+    apiKey: process.env.OPENROUTER_API_KEY || "",
+    models: ["meta-llama/llama-3.3-70b-instruct:free"],
+  },
 };
 
-export type TaskType = "COMMENT_CLASSIFY" | "PRODUCT_PITCH" | "FAQ_REASONING" | "POLICY_REWRITE" | "CHITCHAT" | "SONG_EXTRACT";
+export type TaskType =
+  | "COMMENT_CLASSIFY"
+  | "PRODUCT_PITCH"
+  | "FAQ_REASONING"
+  | "POLICY_REWRITE"
+  | "CHITCHAT"
+  | "SONG_EXTRACT";
 
 interface Route { provider: AIProvider; temperature: number; maxTokens: number }
 
@@ -33,7 +49,14 @@ const ROUTING_TABLE: Record<TaskType, Route> = {
 
 let workingGroqModel: string | null = null;
 
-async function callProvider(p: AIProvider, model: string, messages: any[], temperature: number, maxTokens: number, timeoutMs = 2500) {
+async function callProvider(
+  p: AIProvider,
+  model: string,
+  messages: any[],
+  temperature: number,
+  maxTokens: number,
+  timeoutMs = 2500
+) {
   const start = Date.now();
   const body: any = { model, messages, temperature, max_tokens: maxTokens };
   const ctrl = new AbortController();
@@ -41,7 +64,10 @@ async function callProvider(p: AIProvider, model: string, messages: any[], tempe
   try {
     const res = await fetch(p.baseURL + "/chat/completions", {
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: "Bearer " + p.apiKey },
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer " + p.apiKey,
+      },
       body: JSON.stringify(body),
       signal: ctrl.signal,
     });
@@ -58,8 +84,12 @@ async function callProvider(p: AIProvider, model: string, messages: any[], tempe
   }
 }
 
-const MS_RE = /\b(tak|takde|xde|nak|nk|kat|dah|dh|boleh|ble|berapa|pukul|harga|stok|korang|korg|kita|aku|sy|saya|awak|awk|kau|ko|jom|sebab|sb|kenapa|nape|knape|macam|mcm|betul|btul|cantik|murah|mahal|beli|bli|malam|mlm|esok|tadi|selalu|bila|mana|mane|apa|ape|siapa|sape|assalamualaikum|waalaikumussalam|khabar|santai|borak|kongsi|cerita|cite|sokong|tengok|tgk|jumpa|sayang|syg|weh|wei|woi|bang|abang|kak|kakak|adik|pakcik|makcik|hos|lagu|lg|nyanyi|dengar|dgr|tau|tahu|ajar|ajr|nanti|nnti|nti|hati|jiwa|cinta|rindu|tersesat|seri|dalam|dlm|pak|mak|la|lah|kan|ek|eh|nye|dia|die|orang|org|buat|bagi|bg|minta|mintak|tolong|sila|salah|slh|takpe|je|jer|pun|pn|ni|nih|tu|tuh|ini|itu|dan|atau|untuk|utk|dengan|dgn|yang|yg|pada|kalau|kalo|klo|sudah|sdh|akan|akn|sini|sni|situ|sana|habis|hbs|banyak|byk|sikit|skt|sedikit|besar|kecil|comel|lawak|lucu|gila|gile|sangat|sgt|amat|paling|terlalu|benar|tipu|jujur|ikhlas|serius|srs|gurau|main|pasang|putar|mantap|ngam|syok|kena|kne|hari|ari|malaysia|bos|bossku|abam|member|geng|terima|kasih|rindu|cinta|semua|mereka|kamu|baru|lama|atas|bawah|dekat|jauh|senang|susah|mudah|payah|gembira|sedih|marah|suka|takut|malu|bangga|harap|mesti|perlu|boleh|tidak|ada|tiada|belum|sudah|masih|tetap|sentiasa|kerap|jarang|kadang|selalu|sangat|amat|paling|terlalu|terima|kasih|syukur|maaf|sori|hello|hai|selamat|pagi|petang|malam)\b/i;
-const EN_RE = /\b(the|you|your|yours|you're|are|is|was|were|am|im|i'm|it's|its|this|that|these|those|what|when|where|which|who|why|how|please|thanks|thank|sorry|hello|good|great|nice|cool|love|want|need|can|could|will|would|should|have|has|had|do|does|did|not|don't|cant|can't|won't|yes|maybe|really|very|too|also|and|but|because|if|then|than|about|with|from|for|my|me|mine|our|their|he|she|him|her|them|they|we|us|let|lets|here|there|now|today|tonight|tomorrow|friend|friends|song|music|sing|play|watch|help|know|think|sure|fine|well|better|awesome|amazing|beautiful|wonderful|funny|laugh|laughing|enjoy|miss|wait|come|go|get|make|take|give|send|buy|sell|pay|price|money|coin|coins|gift|gifts|follow|share|stream|live|host)\b/i;
+const MS_RE =
+  /\b(tak|takde|xde|nak|nk|kat|dah|dh|boleh|ble|berapa|pukul|harga|stok|korang|korg|kita|aku|sy|saya|awak|awk|kau|ko|jom|sebab|sb|kenapa|nape|knape|macam|mcm|betul|btul|cantik|murah|mahal|beli|bli|malam|mlm|esok|tadi|selalu|bila|mana|mane|apa|ape|siapa|sape|assalamualaikum|waalaikumussalam|khabar|santai|borak|kongsi|cerita|cite|sokong|tengok|tgk|jumpa|sayang|syg|weh|wei|woi|bang|abang|kak|kakak|adik|pakcik|makcik|hos|lagu|lg|nyanyi|dengar|dgr|tau|tahu|ajar|ajr|nanti|nnti|nti|hati|jiwa|cinta|rindu|tersesat|seri|dalam|dlm|pak|mak|la|lah|kan|ek|eh|nye|dia|die|orang|org|buat|bagi|bg|minta|mintak|tolong|sila|salah|slh|takpe|je|jer|pun|pn|ni|nih|tu|tuh|ini|itu|dan|atau|untuk|utk|dengan|dgn|yang|yg|pada|kalau|kalo|klo|sudah|sdh|akan|akn|sini|sni|situ|sana|habis|hbs|banyak|byk|sikit|skt|sedikit|besar|kecil|comel|lawak|lucu|gila|gile|sangat|sgt|amat|paling|terlalu|benar|tipu|jujur|ikhlas|serius|srs|gurau|main|pasang|putar|mantap|ngam|syok|kena|kne|hari|ari|malaysia|bos|bossku|abam|member|geng|terima|kasih|rindu|cinta|semua|mereka|kamu|baru|lama|atas|bawah|dekat|jauh|senang|susah|mudah|payah|gembira|sedih|marah|suka|takut|malu|bangga|harap|mesti|perlu|boleh|tidak|ada|tiada|belum|sudah|masih|tetap|sentiasa|kerap|jarang|kadang|selalu|sangat|amat|paling|terlalu|terima|kasih|syukur|maaf|sori|hello|hai|selamat|pagi|petang|malam)\b/i;
+
+const EN_RE =
+  /\b(the|you|your|yours|you're|are|is|was|were|am|im|i'm|it's|its|this|that|these|those|what|when|where|which|who|why|how|please|thanks|thank|sorry|hello|good|great|nice|cool|love|want|need|can|could|will|would|should|have|has|had|do|does|did|not|don't|cant|can't|won't|yes|maybe|really|very|too|also|and|but|because|if|then|than|about|with|from|for|my|me|mine|our|their|he|she|him|her|them|they|we|us|let|lets|here|there|now|today|tonight|tomorrow|friend|friends|song|music|sing|play|watch|help|know|think|sure|fine|well|better|awesome|amazing|beautiful|wonderful|funny|laugh|laughing|enjoy|miss|wait|come|go|get|make|take|give|send|buy|sell|pay|price|money|coin|coins|gift|gifts|follow|share|stream|live|host)\b/i;
+
 export function detectLang(text: string): "MS" | "EN" {
   if (MS_RE.test(text)) return "MS";
   if (EN_RE.test(text)) return "EN";
@@ -73,7 +103,8 @@ function demoContent(task: TaskType, messages: any[]): string {
 
   switch (task) {
     case "COMMENT_CLASSIFY":
-      if (/harga|berapa|stok|stock|beli|price/.test(userMsg)) return '{ "intent": "QUESTION", "sentiment": "NEUTRAL", "confidence":0.9}';
+      if (/harga|berapa|stok|stock|beli|price/.test(userMsg))
+        return '{ "intent": "QUESTION", "sentiment": "NEUTRAL", "confidence":0.9}';
       return '{ "intent": "CHITCHAT", "sentiment": "POSITIVE", "confidence":0.8}';
     case "SONG_EXTRACT":
       return "NONE";
@@ -103,15 +134,21 @@ export async function routeAIRequest(task: TaskType, messages: any[]) {
     return { content: demoContent(task, messages), providerUsed: "DEMO", modelUsed: "demo", latencyMs: 0 };
   }
 
-  // ✅ v8.17: compound-mini SENTIASA dicuba dulu + working model sebagai kedua (max 2 model)
-  const fastModels = route.provider.name === "Groq"
-    ? [...new Set([providers.groq.models[0], workingGroqModel, providers.groq.models[1]].filter(Boolean) as string[])].slice(0, 2)
-    : route.provider.models;
+  // ✅ v8.17: cuba model pertama + working model (max 2 model)
+  const fastModels =
+    route.provider.name === "Groq"
+      ? [...new Set([providers.groq.models[0], workingGroqModel, providers.groq.models[1]].filter(Boolean) as string[])].slice(0, 2)
+      : route.provider.models;
 
   const timeoutMs = task === "COMMENT_CLASSIFY" ? 1500 : task === "SONG_EXTRACT" ? 1800 : 2500;
   for (const model of fastModels) {
     try {
       const r = await callProvider(route.provider, model, messages, route.temperature, route.maxTokens, timeoutMs);
+      // ✅ v8.17a: reject empty response dari AI (kalau kosong, cuba model next)
+      if (!r.content || r.content.trim().length === 0) {
+        console.log(`[AI] ⏭️ ${model} return empty - try next`);
+        continue;
+      }
       if (route.provider.name === "Groq") workingGroqModel = model;
       console.log(`[AI] ✅ ${route.provider.name} | ${model} | ${r.latencyMs}ms | "${r.content.slice(0, 50)}"`);
       return { content: r.content, providerUsed: route.provider.name, modelUsed: model, latencyMs: r.latencyMs };
@@ -120,13 +157,17 @@ export async function routeAIRequest(task: TaskType, messages: any[]) {
     }
   }
 
-  console.warn("[AI] ⚠️ Groq lambat/fail - DEMO fallback (fast)");
+  console.warn("[AI] ⚠️ Semua model Groq fail/empty - DEMO fallback");
   return { content: demoContent(task, messages), providerUsed: "DEMO-FALLBACK", modelUsed: "demo", latencyMs: 0 };
 }
 
 export async function classifyComment(text: string) {
   const r = await routeAIRequest("COMMENT_CLASSIFY", [
-    { role: "system", content: 'Klasifikasi komen TikTok Live Malaysia. intent mesti satu daripada: QUESTION | PURCHASE | CHITCHAT | SPAM | TOXIC. PENTING: komen tentang gift TikTok (Punch Card, Heart Me, Rose, Lion, Galaxy), sokongan penonton, sapaan, gelak (haha/😂), atau reaksi BUKAN spam walau ditulis CAPS atau slang pendek (contoh: "cakk", "mantap", "ngam"). SPAM hanya untuk: iklan, link, scam, teks berulang tanpa makna, atau promosi berantai. JSON sahaja, contoh: {"intent":"CHITCHAT","sentiment":"POSITIVE","confidence":0.9}' },
+    {
+      role: "system",
+      content:
+        'Klasifikasi komen TikTok Live Malaysia. intent mesti satu daripada: QUESTION | PURCHASE | CHITCHAT | SPAM | TOXIC. PENTING: komen tentang gift TikTok (Punch Card, Heart Me, Rose, Lion, Galaxy), sokongan penonton, sapaan, gelak (haha/😂), atau reaksi BUKAN spam walau ditulis CAPS atau slang pendek (contoh: "cakk", "mantap", "ngam"). SPAM hanya untuk: iklan, link, scam, teks berulang tanpa makna, atau promosi berantai. JSON sahaja, contoh: {"intent":"CHITCHAT","sentiment":"POSITIVE","confidence":0.9}',
+    },
     { role: "user", content: text },
   ]);
   try {
@@ -139,17 +180,27 @@ export async function classifyComment(text: string) {
 
 export async function rewriteForCompliance(text: string, ruleId: string): Promise<string> {
   const r = await routeAIRequest("POLICY_REWRITE", [
-    { role: "system", content: "Tulis semula ayat ini supaya mematuhi polisi TikTok Malaysia: tiada mengemis gift, tiada pancingan wang, tiada paksaan follow/share. Kekalkan nada mesra Bahasa Melayu pasar, 1-2 ayat pendek, tanpa emoji atau markdown." },
+    {
+      role: "system",
+      content:
+        "Tulis semula ayat ini supaya mematuhi polisi TikTok Malaysia: tiada mengemis gift, tiada pancingan wang, tiada paksaan follow/share. Kekalkan nada mesra Bahasa Melayu pasar, 1-2 ayat pendek, tanpa emoji atau markdown.",
+    },
     { role: "user", content: text },
   ]);
   return r.content;
 }
 
-export async function generateBilingualResponse(text: string, context: string): Promise<{ text: string; lang: "MS" | "EN" }> {
+export async function generateBilingualResponse(
+  text: string,
+  context: string
+): Promise<{ text: string; lang: "MS" | "EN" }> {
   const lang = detectLang(text);
-  const sys = lang === "MS"
-    ? context + " JAWAB DALAM BAHASA MELAYU PASAR SANTAI. JANGAN jawab dalam English. Tanpa emoji, markdown, asterisk atau hashtag."
-    : context + " REPLY IN NATURAL CASUAL ENGLISH. Do not reply in Malay. No emoji, markdown, asterisks or hashtags.";
+  const sys =
+    lang === "MS"
+      ? context +
+        " JAWAB DALAM BAHASA MELAYU PASAR SANTAI. JANGAN jawab dalam English. Tanpa emoji, markdown, asterisk atau hashtag."
+      : context +
+        " REPLY IN NATURAL CASUAL ENGLISH. Do not reply in Malay. No emoji, markdown, asterisks or hashtags.";
   const r = await routeAIRequest("CHITCHAT", [
     { role: "system", content: sys },
     { role: "user", content: text },

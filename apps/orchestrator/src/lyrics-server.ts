@@ -1,6 +1,6 @@
-// ✅ BATIA Lyrics Server v8.73 - port 4002
-// v8.73: tick validation + elapsed cross-check (fix lirik lari laju)
-// v8.72: anti-throttle gesture | v8.71: caption prior | v8.70: tajuk center | v8.69: album detect
+// ✅ BATIA Lyrics Server v8.74 - port 4002
+// v8.74: green mode hide debug UI (no "sampah halus" in chroma)
+// v8.73: tick validation | v8.72: anti-throttle | v8.71: caption prior | v8.70: tajuk center | v8.69: album detect
 import http from "http";
 import path from "path";
 import fs from "fs";
@@ -11,7 +11,7 @@ import { Server as SocketServer } from "socket.io";
 import dotenv from "dotenv";
 const execFileAsync = promisify(execFile);
 
-const SERVER_VERSION = "8.73";
+const SERVER_VERSION = "8.74";
 const __dirname = path.dirname(new URL(import.meta.url).pathname).replace(/^\/([A-Z]:)/, "$1");
 dotenv.config({ path: path.resolve(__dirname, "../.env") });
 const LYRICS_PORT = 4002;
@@ -30,7 +30,7 @@ const EP_OVH = "https://api.lyrics.ovh/v1";
 const EP_GROQ = "https://api.groq.com/openai/v1/audio/transcriptions";
 const EP_YT = "https://www.youtube.com/watch?v=";
 const UA_BROWSER = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
-const UA_APP = "BATIA-OS/8.73 (lyrics bot; contact: local)";
+const UA_APP = "BATIA-OS/8.74 (lyrics bot; contact: local)";
 
 type Word = { w: string; a: number; b: number };
 type Line = { a: number; b: number; text: string; words: Word[] };
@@ -500,7 +500,6 @@ async function loadLyrics(videoId: string, dashboardQuery: string) {
     }
   };
 
-  // ========== PHASE 0: CACHE LIRIK (+ auto-correct) ==========
   try {
     const cf = path.join(lyricsDir, videoId + ".json");
     if (fs.existsSync(cf)) {
@@ -539,7 +538,6 @@ async function loadLyrics(videoId: string, dashboardQuery: string) {
   if (!alive()) return;
   const ytLines = ytRes.lines;
   const captionLangs = ytRes.langs || [];
-  // ✅ v8.71: caption languages sebagai prior bila guess masih "?"
   if (guess === "?" && captionLangs.length > 0) {
     if (captionLangs.some((c) => c.startsWith("ms") || c.startsWith("id"))) { guess = "ms"; console.log(`[LYRICS] 🌐 Caption prior: ms`); }
     else if (captionLangs.every((c) => c.startsWith("en"))) { guess = "en"; console.log(`[LYRICS] 🌐 Caption prior: en`); }
@@ -549,7 +547,6 @@ async function loadLyrics(videoId: string, dashboardQuery: string) {
   const videoDuration = meta?.duration || 0;
   const { artist, title } = parseArtistTitle(rawTitle, channel);
   if (current) current.title = artist ? `${artist} - ${title}` : title;
-  // ✅ v8.69: album/compilation detection
   if (/\b(full album|album penuh|compilation|koleksi|playlist|lagu-lagu|best of|greatest hits|nonstop|non-stop|medley)\b/i.test(rawTitle + " " + dashboardQuery)) {
     finish([], "ALBUM", guess, false);
     console.log(`[LYRICS] 💿 Album/compilation dikesan ("${rawTitle.slice(0, 50)}") - request lagu single untuk lirik`);
@@ -634,7 +631,6 @@ socket.on("music:started", (d: any) => {
   const elapsedNow = now - current.t0;
   if (elapsedNow >= 0 && elapsedNow < 2500) { current.t0 = now; current.pausedAt = 0; current.frontendElapsed = undefined; current.lastTickAt = 0; }
 });
-// ✅ v8.73: tick validation - reject elapsed yang kelajuan tak masuk akal
 socket.on("music:tick", (d: any) => {
   if (current && typeof d?.elapsed === "number") {
     const now = Date.now();
@@ -668,7 +664,6 @@ function computePayload(): any {
   if (!current) return { v: SERVER_VERSION, playing: false, title: "", elapsed: 0, hasLyrics: false, loading: false, prev: null, line: null, next: null, sync: false, offsetMs: 0, leadIn: 0, source: "", lang: "" };
   const now = Date.now();
   const tickFresh = current.lastTickAt && (now - current.lastTickAt) < 3000;
-  // ✅ v8.73: cross-check tick vs jam server - kalau beza >20s, guna jam server (speed sentiasa 1x)
   const wall = current.pausedAt ? (current.pausedAt - current.t0) : now - current.t0;
   let elapsed: number;
   if (tickFresh && current.frontendElapsed !== undefined && Math.abs(current.frontendElapsed - wall) < 20000) elapsed = current.frontendElapsed;
@@ -723,7 +718,9 @@ const OVERLAY_HTML = `<!doctype html>
 <script>
   const PAGE_VERSION = "@@V@@";
   const q = new URLSearchParams(location.search);
-  if (q.get("bg") === "green") document.body.style.background = "#00ff00";
+  // ✅ v8.74: detect green mode untuk hide debug UI
+  const GREEN_MODE = q.get("bg") === "green";
+  if (GREEN_MODE) document.body.style.background = "#00ff00";
   const elBox = document.getElementById("lyrBox");
   const elPrev = document.getElementById("prev");
   const elLine = document.getElementById("line");
@@ -733,11 +730,12 @@ const OVERLAY_HTML = `<!doctype html>
   const elLoad = document.getElementById("load");
   const elVer = document.getElementById("ver");
   const elAnti = document.getElementById("anti");
+  // ✅ v8.74: hide version badge dalam chroma mode (elak sampah halus dalam live)
+  if (GREEN_MODE) { elVer.style.display = "none"; }
   let lastText = "";
   let wordSpans = [];
   let fadeTimer = null;
 
-  // ✅ v8.72: anti-throttle robust - AudioContext perlu gesture untuk resume
   let keepCtx = null;
   function startKeepAlive() {
     try {
@@ -799,7 +797,8 @@ const OVERLAY_HTML = `<!doctype html>
     elTitle.style.display = "block";
     elTitle.textContent = "🎵 " + (d.title.length > 70 ? d.title.slice(0, 70) + "…" : d.title);
     elBox.classList.add("on");
-    elLoad.style.display = d.loading ? "block" : "none";
+    // ✅ v8.74: hide loading indicator dalam chroma mode
+    elLoad.style.display = (GREEN_MODE || !d.loading) ? "none" : "block";
     if (!d.hasLyrics) {
       elLine.innerHTML = ""; elLine.className = "";
       elPrev.textContent = ""; elNext.textContent = "";

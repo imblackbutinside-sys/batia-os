@@ -14,3 +14,26 @@ pnpm-debug.log*
 apps/orchestrator/audio/
 
 apps/orchestrator/audio/
+
+# Cookies
+tools/cookies.txt
+
+# Runtime
+last_tiktok_user.txt
+.env.*
+
+# Gift effect videos (besar, local sahaja)
+apps/web/public/effects/**/*.mp4
+apps/web/public/effects/**/*.webm
+apps/web/public/effects/**/*.mov
+apps/web/public/effects/**/*.m4v
+
+# Runtime
+last_tiktok_user.txt
+.env.*
+
+# Gift effect videos (besar, local sahaja)
+apps/web/public/effects/**/*.mp4
+apps/web/public/effects/**/*.webm
+apps/web/public/effects/**/*.mov
+apps/web/public/effects/**/*.m4v

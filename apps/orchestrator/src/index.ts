@@ -22,7 +22,7 @@ const policyPath = path.resolve(__dirname, "../../../policies/tiktok_my_2026.yam
 const engine = new LiveContextEngine(new PolicyEngine(policyPath));
 
 console.log("[EVENTS] WS_EVENTS =", JSON.stringify(WS_EVENTS));
-console.log("[BUILD] BATIA v8.61 - CORS header untuk /music/ (lead-in detector berfungsi)");
+console.log("[BUILD] BATIA v8.62a - empty response guards (TTS tak cakap default bila AI kosong)");
 
 try {
   const audioDir = path.join(process.cwd(), "audio");
@@ -145,7 +145,17 @@ function ttsNormalize(t: string): string {
 }
 
 async function speakMixed(text: string, forceLang?: "MS" | "EN"): Promise<string> {
+  // ✅ v8.62a: guard - JANGAN cakap kalau AI return empty
+  if (!text || text.trim().length === 0) {
+    console.log("[TTS] ⏭️ Skip: AI return empty response - tak cakap apa-apa");
+    return "";
+  }
   const cleaned = ttsNormalize(cleanAiOutput(text));
+  // ✅ v8.62a: double-check lepas normalize (kalau semua kena trim jadi kosong)
+  if (!cleaned || cleaned.length === 0) {
+    console.log("[TTS] ⏭️ Skip: response kosong lepas normalize");
+    return "";
+  }
   const lang = forceLang || "MS";
   if (isDuplicateTts(cleaned, lang)) return "";
   
@@ -317,6 +327,11 @@ function handleJoin(uname: string) {
         { role: "system", content: "Kau host TikTok Live Malaysia yang mesra. Sapa penonton baru dengan nama dia. 1 ayat pendek santai Bahasa Melayu pasar. JANGAN emoji, markdown, asterisk. Guna ya bukan ye." },
         { role: "user", content: "Penonton baru join: " + uname },
       ]);
+      // ✅ v8.62a: skip TTS kalau AI return empty
+      if (!r.content || r.content.trim().length === 0) {
+        console.log(`[GREET] ⏭️ Skip: AI return empty untuk ${uname}`);
+        return;
+      }
       if (scriptQueue.running) { scriptQueue.addGreet(r.content, uname); }
       else {
         let g = r.content;
@@ -416,7 +431,6 @@ function saveCache() {
   } catch (e) {}
 }
 
-// ✅ v8.53: helper padam audio selepas play (behavior asal, storage-safe)
 function songFileCacheDelete(filename: string) {
   for (const [k, v] of songFileCache.entries()) {
     if (v.filename === filename) songFileCache.delete(k);
@@ -588,7 +602,6 @@ async function enqueueSong(q: string, by: string) {
   if (!songPlaying) void playNextInQueue();
 }
 
-// ✅ v8.61: CORS header ditambah supaya dashboard boleh fetch audio untuk lead-in detection
 httpServer.on("request", (req, res) => {
   const serve = (dir: string) => {
     const file = path.join(dir, path.basename(req.url || ""));
@@ -639,7 +652,8 @@ function sanitizeForRegularMode(text: string): string {
   const pats = [/tekan beg kuning/gi, /beg kuning/gi, /beg hijau/gi, /keranjang kuning/gi, /jualan/gi, /jual\b/gi, /produk/gi, /beli\b/gi, /membeli/gi, /order\b/gi, /shopping/gi, /checkout/gi, /promo/gi, /diskaun/gi, /harga/gi, /stok/gi, /beg\b/gi, /cart\b/gi, /troli/gi, /kod\s+\w+/gi, /baucar/gi, /voucher/gi, /flash\s+sale/gi, /sale\b/gi];
   for (const p of pats) c = c.replace(p, "");
   c = c.replace(/\s+/g, " ").replace(/\s+([,.!?])/g, "$1").replace(/^[\s,.!?]+/, "").trim();
-  if (!c || c.length < 8) c = "Ok member, jom kita borak santai malam ni!";
+  // ✅ v8.62a: return kosong instead of default message - biarkan caller decide
+  if (!c || c.length < 8) return "";
   return c;
 }
 
@@ -741,6 +755,11 @@ async function processComment(username: string, text: string) {
         }
       }
       if (currentMode === "REGULAR") clean = sanitizeForRegularMode(clean);
+      // ✅ v8.62a: skip TTS kalau response kosong (AI gagal atau sanitize buang semua)
+      if (!clean || clean.trim().length === 0) {
+        console.log(`[COMMENT] ⏭️ Skip TTS: response kosong untuk "${aiText.slice(0, 40)}"`);
+        return;
+      }
       if (isDuplicateResponse(clean)) return;
       if (currentMode === "SHOPPABLE" && scriptQueue.running) scriptQueue.addResponse(clean, username + ": " + text);
       else {
@@ -763,6 +782,11 @@ async function processGift(username: string, giftName: string, giftValue: number
     io.emit("gift:visual", { username, giftName, giftValue });
     let reaction = await engine.handleGift(session.id, username, giftName, giftValue);
     if (currentMode === "REGULAR") reaction = sanitizeForRegularMode(reaction);
+    // ✅ v8.62a: skip TTS kalau reaction kosong
+    if (!reaction || reaction.trim().length === 0) {
+      console.log(`[GIFT] ⏭️ Skip TTS: reaction kosong untuk ${giftName} dari ${username}`);
+      return;
+    }
     if (isDuplicateResponse(reaction)) return;
     const audioUrl = await speakMixed(reaction);
     if (audioUrl) emitResponse({ type: "GIFT_REACTION", content: reaction, targetUser: username, audioUrl });
@@ -865,7 +889,6 @@ io.on("connection", (socket) => {
     console.log("[MUSIC] sync frontend playing:", currentlyPlayingQ);
   });
 
-  // relay tick + offset calibration ke lyrics server
   socket.on("music:tick", (d: any) => io.emit("music:tick", d));
   socket.on("lyrics:offset", (d: any) => io.emit("lyrics:offset", d));
 
@@ -899,7 +922,6 @@ io.on("connection", (socket) => {
     if (!songPlaying) return;
     deleteCurrentMusic();
     songPlaying = false; currentlyPlayingQ = "";
-    // ✅ v8.45: bagitahu lyrics server lagu dah habis (kalau tiada next dalam queue)
     if (songQueue.length === 0) {
       io.emit("music:status", { state: "STOPPED" });
       console.log("[MUSIC] 🏁 Lagu tamat - emit STOPPED untuk lyrics overlay");
