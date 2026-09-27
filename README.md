@@ -1,6 +1,6 @@
 ﻿# BATIA OS 🎤🤖
 
-**AI Host Orchestrator untuk TikTok Live Malaysia** — auto-reply komen, reaction gift dengan cinematic effects, muzik request + lirik karaoke synced, TTS Bahasa Melayu pasar, drag-and-drop effect manager, dan chroma key integration untuk TikTok Live Studio.
+**AI Host Orchestrator untuk TikTok Live Malaysia** — auto-reply komen, reaction gift dengan cinematic effects (drag & drop manager), muzik request + lirik karaoke synced, TTS Bahasa Melayu pasar, dan chroma key integration untuk TikTok Live Studio.
 
 ---
 
@@ -11,7 +11,7 @@
 3. [Installation](#3-installation)
 4. [Menjalankan Sistem (3 Terminal)](#4-menjalankan-sistem-3-terminal)
 5. [Setup Dashboard & TikTok Connect](#5-setup-dashboard--tiktok-connect)
-6. [Setup TikTok Live Studio (Overlay + Chroma)](#6-setup-tiktok-live-studio-overlay--chroma)
+6. [Setup TikTok Live Studio (2 Overlay Asing)](#6-setup-tiktok-live-studio-2-overlay-asing)
 7. [Gift Effects Tier System](#7-gift-effects-tier-system)
 8. [Effects Manager (Drag & Drop)](#8-effects-manager-drag--drop)
 9. [Muzik & Lirik Karaoke](#9-muzik--lirik-karaoke)
@@ -29,21 +29,24 @@
 | Service | Port | Fungsi |
 |---|---|---|
 | **Orchestrator** | `4000` | Backend utama: socket.io, TikTok adapter, TTS queue, music download, policy engine, AI routing |
-| **Web Dashboard** | `3000` | Next.js: dashboard host + gift overlay (`/overlay?bg=green`) + effects scanner/upload/delete API |
-| **Lyrics Server** | `4002` | Lirik synced overlay (`/?bg=green`), lyric fetch chain, offset calibration |
+| **Web Dashboard** | `3000` | Next.js: dashboard host + **gift overlay** (`/overlay?bg=green`) + effects API (scan/upload/delete) |
+| **Lyrics Server** | `4002` | **Lirik overlay** (`/?bg=green`) + enjin lirik (fetch chain, offset, tick validation) |
 
 ```
 TikTok Live ──> TikTokAdapter ──> Orchestrator (:4000)
                                       │  ├─> PolicyEngine + LiveContextEngine
-                                      │  ├─> AIRouter (Groq/Gemini/OpenRouter/Qwen)
+                                      │  ├─> AIRouter (Groq → Gemini → OpenRouter → Qwen)
                                       │  ├─> TtsEngine (Edge TTS ms-MY)
                                       │  ├─> Music (yt-dlp → audio/music/)
                                       │  └─> relay music:tick / lyrics:offset
-                                      ├─> Web Dashboard (:3000)
-                                      │      ├─> Dashboard (QuickControls + Effects Manager)
-                                      │      └─> Gift Overlay (/overlay?bg=green)
-                                      └─> Lyrics Server (:4002) → Overlay karaoke
+                                      ├─> Web (:3000)
+                                      │     ├─ Dashboard (QuickControls + Effects Manager 🎬)
+                                      │     └─ GIFT overlay  /overlay?bg=green   ─┐
+                                      └─> Lyrics (:4002)                          ├─ TikTok Studio
+                                            └─ LIRIK overlay /?bg=green          ─┘ (2 source asing)
 ```
+
+> **Design note:** Gift overlay dan lirik overlay **sengaja diasingkan** (2 window, 2 source TikTok Studio) supaya host bebas susun posisi setiap layer dalam Studio tanpa bertindih.
 
 ---
 
@@ -53,7 +56,7 @@ TikTok Live ──> TikTokAdapter ──> Orchestrator (:4000)
 - **Node.js 20+** — https://nodejs.org
 - **pnpm** — `npm install -g pnpm`
 - **Git for Windows**
-- **Google Chrome** (untuk overlay window)
+- **Google Chrome** (untuk overlay windows)
 - **TikTok Live Studio** (untuk streaming)
 - **API Keys:**
   - `GROQ_API_KEY` — **WAJIB** (AI chit-chat + Whisper lirik) — https://console.groq.com
@@ -89,6 +92,7 @@ mkdir D:\batia-os\tools
 ```
 
 > Cookies diperlukan untuk download lagu YouTube tanpa kena block / age-gate.
+> ⚠️ `cookies.txt` ada dalam `.gitignore` — JANGAN push ke GitHub.
 
 ### 3.4 Setup `.env`
 
@@ -108,26 +112,22 @@ ORCHESTRATOR_PORT=4000
 LYRICS_OFFSET_MS=0
 ```
 
-> ⚠️ **JANGAN commit `.env` ke GitHub.** Pastikan `.gitignore` ada baris `.env`.
-
 ### 3.5 Database (Prisma)
 
 ```powershell
 cd packages/database
-# Set DATABASE_URL dalam .env root/monorepo ikut schema (sqlite/postgres)
+# Set DATABASE_URL dalam .env ikut schema (sqlite/postgres)
 npx prisma db push
 npx prisma generate
 cd ..\..
 ```
 
-### 3.6 Folder gift effects (dibuat auto oleh Effects Manager, tapi boleh manual)
+### 3.6 Folder gift effects (optional — boleh guna Effects Manager instead)
 
 ```powershell
 mkdir D:\batia-os\apps\web\public\effects\tier1
 mkdir D:\batia-os\apps\web\public\effects\tier2
 mkdir D:\batia-os\apps\web\public\effects\tier3
-# Letak video effect (.mp4 background HITAM / .webm alpha) dalam folder tier
-# ATAU guna Effects Manager drag&drop dari dashboard (Section 8)
 ```
 
 ---
@@ -141,11 +141,11 @@ Buka **3 terminal berasingan**:
 cd D:\batia-os
 pnpm dev:orch
 
-# TERMINAL 2 — Web dashboard (:3000)
+# TERMINAL 2 — Web dashboard + gift overlay (:3000)
 cd D:\batia-os\apps\web
 pnpm dev
 
-# TERMINAL 3 — Lyrics server (:4002)
+# TERMINAL 3 — Lyrics server + lirik overlay (:4002)
 cd D:\batia-os\apps\orchestrator
 npx tsx src/lyrics-server.ts
 ```
@@ -154,6 +154,8 @@ Tunggu semua ready:
 - Terminal 1: `BATIA Orchestrator on http://localhost:4000`
 - Terminal 2: `✓ Ready`
 - Terminal 3: `[LYRICS] 🌐 Overlay lirik: http://localhost:4002`
+
+> Ketiga-tiga terminal **WAJIB hidup** masa live. Terminal 3 ialah enjin lirik — walau overlay lirik cuma dipakai dari :4002, dia juga sumber data lirik.
 
 ---
 
@@ -167,23 +169,14 @@ Tunggu semua ready:
 6. Mode: **REGULAR LIVE** (chit-chat) / **SHOPPABLE LIVE** (pitch produk)
 
 ### Butang test
-- `Test 1: Chit-chat selamat`, `Test EN`, `Test 2-4`, `SHOP 1-2` — hantar komen simulasi
-- `Test Gift` / `Test Join` — simulasi gift & penonton masuk
+- `Test 1-4`, `SHOP 1-3`, `Test EN` — komen simulasi (chit-chat, soalan, violation)
+- `Test GIFT: Heart Me / Rose` — simulasi gift (trigger overlay effect)
+- `Test JOIN` / `Test MUZIK` — penonton masuk / request lagu
 - `Clear Cache` — reset dedupe cache
-
-### QuickControls (bar bawah dashboard)
-- **Skip** — skip lagu sekarang, main queue seterusnya
-- **Lirik cepat -0.5s** — lirik maju 0.5 saat
-- **Lirik lambat +0.5s** — lirik undur 0.5 saat
-
-### Effects Manager (🎬 butang kanan-bawah dashboard)
-- Drag & drop video effect dari folder Windows terus ke tier
-- Preview, senarai, buang video — semua dalam dashboard
-- Lihat Section 8 untuk detail
 
 ---
 
-## 6. Setup TikTok Live Studio (Overlay + Chroma)
+## 6. Setup TikTok Live Studio (2 Overlay Asing)
 
 ### 6.1 Chrome khas anti-throttle (WAJIB untuk lirik smooth)
 
@@ -193,22 +186,28 @@ Buat **shortcut desktop** dengan target:
 "C:\Program Files\Google\Chrome\Application\chrome.exe" --user-data-dir=D:\overlay-chrome --disable-background-timer-throttling --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-features=CalculateNativeWinOcclusion --app=http://localhost:4002/?bg=green
 ```
 
-- Launch shortcut → **KLIK SEKALI** pada pill merah "AKTIFKAN ANTI-THROTTLE" (sekali sahaja tiap session)
-- Window ni boleh sorok belakang / monitor kedua — **JANGAN minimize**
+- Launch shortcut → **KLIK SEKALI** pill merah "AKTIFKAN ANTI-THROTTLE"
+- Window ni boleh duduk belakang / monitor kedua — **JANGAN minimize**
 
-### 6.2 Source dalam TikTok Live Studio
+### 6.2 Window gift overlay
 
-| Overlay | URL | Capture |
-|---|---|---|
-| **Lirik karaoke** | `http://localhost:4002/?bg=green` | Window Capture window Chrome khas |
-| **Gift effects** | `http://localhost:3000/overlay?bg=green` | Window Capture tab berasingan |
+- Buka `http://localhost:3000/overlay?bg=green`
+- **Klik kanan tab → "Move tab to new window"** (WAJIB window sendiri — Chrome pause video dalam tab background!)
+- Klik sekali dalam window tu (unlock autoplay)
+
+### 6.3 Source dalam TikTok Live Studio
+
+| Layer | Window | URL | Susunan cadangan |
+|---|---|---|---|
+| **LIRIK** | Window Chrome khas | `http://localhost:4002/?bg=green` | Bawah-tengah, scale ~80% |
+| **GIFT** | Window tab terpisah | `http://localhost:3000/overlay?bg=green` | Tengah, full frame |
 
 Untuk setiap source:
-1. Add Source → **Window Capture** → pilih window overlay
+1. Add Source → **Window Capture** → pilih window berkenaan
 2. Klik kanan source → **Filters** → Add → **Chroma Key** → key color `#00ff00`
-3. Hijau jadi transparent → lirik / gift effect terapung atas video live
+3. Drag / scale setiap source bebas — **2 layer asing, tak bertindih**
 
-> Rule: jangan minimize window overlay; occluded / belakang OK.
+> Rule: jangan minimize window overlay; belakang / occluded OK (flags anti-throttle jaga lirik, auto-resume jaga gift).
 
 ---
 
@@ -229,42 +228,43 @@ apps/web/public/effects/
 - Panjang ideal 4-6 saat (auto-clear)
 - Banyak fail dalam satu tier → pilih random setiap gift
 - Folder kosong → fallback confetti CSS
-- Verify scanner: `curl http://localhost:3000/api/effects`
 
 ### Flow playback
-1. Gift masuk → tier ditentukan oleh `tierFor()`
-2. Scanner check folder tier → pilih random video
-3. `LumaKeyVideo` component: canvas process frame-by-frame, pixel gelap (luma <18) → transparent, pixel cerah → opaque
+1. Gift masuk → `tierFor()` tentukan tier ikut nama/nilai gift
+2. Scanner pilih random video dari folder tier
+3. `LumaKeyVideo`: canvas process frame-by-frame — pixel hitam → transparent (max-channel key, warna saturated kekal solid)
 4. Effect terapung atas green screen → chroma key TikTok Studio → composite dalam live
-5. Auto-clear 5 saat
+5. Auto-clear bila video habis
+
+### Chrome power-saving guard
+- Overlay gift **WAJIB window sendiri** (bukan tab background)
+- Auto-resume + retry (12x) bila Chrome pause video untuk jimat power (`AbortError`)
+- Hybrid draw loop (rAF + interval) — jalan walau window occluded
 
 ---
 
 ## 8. Effects Manager (Drag & Drop)
 
-Butang **🎬** terapung kanan-bawah dashboard → klik untuk buka panel manager.
+Butang **🎬** terapung kanan-bawah dashboard → klik untuk buka panel.
 
 ### Features
 - **Drag & drop** video dari Windows Explorer terus ke tier drop-zone
 - **Klik** drop-zone untuk pilih fail (multiple files)
-- **Senarai** video dalam setiap tier dengan nama fail
-- **▶ Preview** — buka video dalam tab baru
-- **🗑 Buang** — delete fail dari server
-- **Auto-refresh** senarai lepas upload/delete
-- **Cache 30 saat** — effect list auto-rescan
+- **Senarai** video setiap tier + **▶ preview** + **🗑 buang**
+- Auto-refresh lepas upload/delete; scanner cache 30 saat
 
-### API endpoints (untuk reference)
+### API endpoints
 ```
 GET  /api/effects         — senarai video mengikut tier
 POST /api/effects/upload  — upload fail (FormData: tier + file)
 POST /api/effects/delete  — buang fail (JSON: { tier, file })
 ```
 
-### Tips effect video
-- Background HITAM murni (RGB 0,0,0) — luma key auto-buang
-- Warna cerah / neon dalam effect = OK, akan terapung cantik
-- Elak hitam separa (grey) — boleh jadi semi-transparent
-- Resolution tinggi OK — canvas scale down ke max 420px width untuk performance
+### Verify scanner
+```powershell
+curl -UseBasicParsing http://localhost:3000/api/effects
+# {"tier1":["/effects/tier1/HeartMe.mp4"],"tier2":[],"tier3":[]}
+```
 
 ---
 
@@ -272,12 +272,11 @@ POST /api/effects/delete  — buang fail (JSON: { tier, file })
 
 ### 9.1 Request lagu
 - Viewer: komen `mainkan lagu <tajuk>` / `lagu <tajuk>`
-- Host: dashboard → input Muzik → **Mainkan**, atau QuickControls
-- Queue max 5; duplicate auto-skip; `skip`/`cancel` dari komen pun berfungsi
+- Host: dashboard → input Muzik → **Mainkan**
+- Queue max 5; duplicate auto-skip; komen `skip`/`cancel` pun berfungsi
 
 ### 9.2 Sync lirik
-- Dashboard: **Lirik cepat -0.5s** / **Lirik lambat +0.5s**
-- QuickControls bar (bawah dashboard): butang sama + **Skip**
+- Dashboard / QuickControls: **Lirik cepat -0.5s** / **Lirik lambat +0.5s**
 - Offset auto-save dalam cache lagu (`audio/music/lyrics/<videoId>.json`)
 
 ### 9.3 Chain sumber lirik (auto-fallback)
@@ -290,12 +289,13 @@ POST /api/effects/delete  — buang fail (JSON: { tier, file })
    + text-replacement dari plain lyrics (betulkan ejaan)
 6. Plain lyrics (Lyrist/OVH) — timing rata (last resort)
 ```
-Guard pintar:
-- **Album/compilation detection** → "album mode" (lirik per-lagu mustahil untuk 1 video 10 lagu)
-- **Bahasa MS/EN cross-check** (elak Whisper hallucinate English)
-- **Hallucination filter** (buang baris generic macam "thanks for watching")
+
+### 9.4 Guard pintar
+- **Album/compilation detection** → "album mode" (1 video 10 lagu = lirik per-lagu mustahil)
+- **Caption-language prior** (caption ms → hint Bahasa Melayu)
+- **Reject full-English** untuk konteks MS (elak hallucination)
+- **Hallucination filter** (buang "thanks for watching" dll)
 - **Tick validation** (lirik tak boleh lari laju bila dashboard tick tak konsisten)
-- **Caption-language prior** (kalau video ada caption ms, guna tu sebagai hint)
 
 ---
 
@@ -304,7 +304,6 @@ Guard pintar:
 Provider chain: **Groq (primary)** → Gemini → OpenRouter → Qwen. Tiada key = provider auto-skip. Semua gagal = contextual fallback (live tak pernah senyap).
 
 ### 10.1 Semak model Groq yang hidup untuk key kamu
-
 ```powershell
 $key = "<GROQ_API_KEY dari .env>"
 (Invoke-RestMethod -Uri "https://api.groq.com/openai/v1/models" -Headers @{ Authorization = "Bearer $key" }).data.id
@@ -315,18 +314,13 @@ Edit `apps/orchestrator/src/router/AIRouter.ts`:
 ```ts
 groq: { ..., models: ["openai/gpt-oss-20b", "qwen/qwen3.8-27b"] },
 ```
-Guna 2 ID pertama dari output `/models`. Model lama (llama-3.3-70b-versatile dll) mungkin sudah retired → 404.
+Guna 2 ID pertama dari output `/models`. Model lama mungkin retired → 404.
 
 ### 10.3 Task routing
-`COMMENT_CLASSIFY`, `CHITCHAT`, `PRODUCT_PITCH`, `FAQ_REASONING`, `POLICY_REWRITE`, `SONG_EXTRACT` — semua melalui `routeAIRequest()` dengan timeout ketat (1.5-2.5s) supaya latency live kekal ~1-2 saat.
+`COMMENT_CLASSIFY`, `CHITCHAT`, `PRODUCT_PITCH`, `FAQ_REASONING`, `POLICY_REWRITE`, `SONG_EXTRACT` — timeout ketat 1.5-2.5s supaya latency live kekal ~1-2 saat.
 
-### 10.4 Empty response guards (v8.62a)
-5 layer guard elak TTS cakap default message bila AI return kosong:
-- `speakMixed()` guard
-- `handleJoin()` guard
-- `processGift()` guard
-- `processComment()` guard
-- `sanitizeForRegularMode()` return kosong instead of default
+### 10.4 Empty response guards
+5 layer guard elak TTS cakap default message bila AI return kosong (`speakMixed`, `handleJoin`, `processGift`, `processComment`, `sanitizeForRegularMode`).
 
 ---
 
@@ -345,21 +339,20 @@ Hanya mount pada pathname `/` — overlay green screen tetap bersih.
 
 | Masalah | Punca | Fix |
 |---|---|---|
-| Lirik stuck bila cycle tab/window | Browser throttle background tab | Guna shortcut Chrome anti-throttle (6.1) + klik pill sekali; jangan minimize |
-| `[AI] ❌ HTTP 404 model does not exist` | Model Groq retired | Semak `/models` (10.1) → update `AIRouter.ts` |
-| AI reply empty tapi TTS cakap default | — | Sudah fixed v8.62a: empty response di-skip |
-| Lirik English untuk lagu Melayu | Whisper auto-detect silap | Sudah fixed v8.71: caption-language prior + reject full-EN |
-| Lirik lari laju / freeze | Tick dashboard tak konsisten | Sudah fixed v8.73: tick ratio validation + cross-check jam server |
-| Playlist/album tiada lirik | 1 video = banyak lagu | By design: "album mode" — request lagu single |
-| `/overlay` tunjuk dashboard | File overlay tertindih | Paste semula `overlay/page.tsx` (gift overlay v8.64); clear `.next` |
-| Dashboard hilang section / putih | Zombie server port 3000 atau `.next` lapuk | `Get-NetTCPConnection -LocalPort 3000 ... Stop-Process`; `Remove-Item .next -Recurse -Force`; restart |
-| `FAILED: <tajuk>` music | yt-dlp tak jumpa / throttle 60s | Tunggu 60s, cuba tajuk penuh `Tajuk - Artis`; check `tools/cookies.txt` |
-| LRCLIB 503 / Lyrist 429 | Rate limit luar | Auto-retry dengan backoff; Whisper fallback |
-| Gift effect tak keluar | Folder tier kosong / cache scanner | Guna Effects Manager 🎬 → upload video; atau tunggu 30s; check `/api/effects` |
-| Tompok hitam dalam stream | Effect video bg hitam tanpa luma key | Guna `.mp4` (luma key auto) — jangan letak bg hijau |
+| Gift effect tak keluar langsung | Overlay jadi tab background → Chrome pause video | Move tab to new window; klik sekali unlock autoplay |
+| Console: `AbortError ... paused to save power` | Chrome power-saving | v8.70 auto-resume+retry; pastikan window sendiri |
+| Lirik stuck bila cycle tab/window | Browser throttle background tab | Guna shortcut Chrome anti-throttle (6.1); jangan minimize |
+| Effect ada hijau bocor dalam warna | Luma key lama (luminance) | v8.70 guna max-channel key — warna solid |
+| Lirik English untuk lagu Melayu | Whisper auto-detect silap | Caption-language prior + reject full-EN (v8.71+) |
+| Lirik lari laju / freeze | Tick dashboard tak konsisten | Tick validation (v8.73+) |
+| Playlist/album tiada lirik | 1 video banyak lagu | By design: album mode — request lagu single |
+| `/overlay` tunjuk dashboard | File overlay tertindih | Paste semula `overlay/page.tsx` v8.70; clear `.next` |
+| Dashboard hilang section / putih | Zombie server :3000 / `.next` lapuk | Kill port 3000; `Remove-Item .next -Recurse -Force`; restart |
+| 🎬 Effects Manager tak muncul | `layout.tsx` tak import `<EffectsManager />` | Paste layout v8.64 penuh |
+| `FAILED: <tajuk>` music | yt-dlp throttle 60s / title silap | Tunggu 60s; guna `Tajuk - Artis`; check `tools/cookies.txt` |
+| LRCLIB 503 / Lyrist 429 | Rate limit luar | Auto-retry backoff; Whisper fallback |
+| `[AI] ❌ HTTP 404 model does not exist` | Model Groq retired | Semak `/models` → update `AIRouter.ts` |
 | Port sudah guna | Process lama | `Get-NetTCPConnection -LocalPort <port> \| ... Stop-Process -Force` |
-| Effects Manager 🎬 tak muncul | `layout.tsx` tak import `<EffectsManager />` | Paste layout.tsx v8.64 penuh |
-| Upload effect gagal | File terlalu besar / format tak support | Max ~50MB; guna `.mp4`/`.webm`/`.mov`/`.m4v` |
 
 ---
 
@@ -391,9 +384,15 @@ node_modules/
 .next/
 .env
 .env.*
+*.log
 tools/cookies.txt
 apps/orchestrator/audio/
+audio/*.mp3
 last_tiktok_user.txt
+apps/web/public/effects/**/*.mp4
+apps/web/public/effects/**/*.webm
+apps/web/public/effects/**/*.mov
+apps/web/public/effects/**/*.m4v
 ```
 
 ---
@@ -403,40 +402,35 @@ last_tiktok_user.txt
 ```
 batia-os/
 ├── apps/
-│   ├── orchestrator/            # Backend :4000
-│   │   ├── src/index.ts         # Orchestrator utama (v8.62a)
-│   │   ├── src/router/AIRouter.ts
-│   │   ├── src/lyrics-server.ts # Lyrics server (v8.74)
-│   │   ├── src/policy/  src/core/  src/voice/  src/adapters/
-│   │   ├── audio/music/         # cache lagu + lyrics/ (local, gitignore)
+│   ├── orchestrator/              # Backend :4000 + lyrics :4002
+│   │   ├── src/index.ts           # Orchestrator utama (v8.62a guards)
+│   │   ├── src/router/AIRouter.ts # Provider chain + routing
+│   │   ├── src/lyrics-server.ts   # Lyrics engine + overlay (v8.74)
+│   │   ├── src/policy/ src/core/ src/voice/ src/adapters/
+│   │   ├── audio/music/           # cache lagu + lyrics/ (gitignore)
 │   │   └── .env
-│   └── web/                     # Next.js :3000
-│       ├── src/app/page.tsx                 # Dashboard
-│       ├── src/app/layout.tsx               # Root layout + QuickControls + EffectsManager (v8.64)
+│   └── web/                       # Next.js :3000
+│       ├── src/app/page.tsx       # Dashboard
+│       ├── src/app/layout.tsx     # Root layout + QuickControls + EffectsManager
 │       ├── src/app/components/
-│       │   ├── QuickControls.tsx             # Skip + lirik cepat/lambat
-│       │   └── EffectsManager.tsx           # Drag&drop gift effect
-│       ├── src/app/overlay/page.tsx         # Gift overlay v8.64 (tanpa card/border)
+│       │   ├── QuickControls.tsx  # Skip + lirik cepat/lambat
+│       │   └── EffectsManager.tsx # Drag&drop gift effect
+│       ├── src/app/overlay/page.tsx   # GIFT overlay v8.70 (luma key, tiada lirik)
 │       ├── src/app/api/effects/
-│       │   ├── route.ts                     # Scanner (list)
-│       │   ├── upload/route.ts              # Upload effect
-│       │   └── delete/route.ts              # Delete effect
-│       └── public/effects/
-│           ├── tier1/                       # Gift <100 coins
-│           ├── tier2/                       # Gift 100-999 coins
-│           └── tier3/                       # Gift 1000+ coins
+│       │   ├── route.ts           # Scanner (list)
+│       │   ├── upload/route.ts    # Upload effect
+│       │   └── delete/route.ts    # Delete effect
+│       └── public/effects/tier1|tier2|tier3/   # video effect (gitignore)
 ├── packages/
-│   ├── database/                # Prisma schema + client
-│   └── shared/                  # WS_EVENTS constants
-├── policies/tiktok_my_2026.yaml # Policy firewall TikTok MY
-├── tools/                       # yt-dlp.exe + cookies.txt (gitignore)
+│   ├── database/                  # Prisma schema + client
+│   └── shared/                    # WS_EVENTS constants
+├── policies/tiktok_my_2026.yaml   # Policy firewall TikTok MY
+├── tools/                         # yt-dlp.exe + cookies.txt (gitignore)
 └── README.md
 ```
 
-### Senarai file yang **WAJIB ADA** dalam repo (verify sebelum push)
-
+### Verify file critical sebelum push
 ```powershell
-# Run ni untuk check semua file critical wujud
 @(
   "apps/orchestrator/src/index.ts",
   "apps/orchestrator/src/lyrics-server.ts",
@@ -458,24 +452,26 @@ batia-os/
 
 | Versi | Perubahan |
 |---|---|
-| **v8.64** | **Effects Manager drag&drop dari dashboard + overlay tanpa card/border + layout v8.64** |
-| v8.63 | Gift effects tier system (local folder + luma key) |
-| v8.62a | Empty-response guards (5 layer — TTS tak cakap default bila AI kosong) |
-| v8.74 | Green mode hide debug UI (tiada sampah halus dalam chroma) |
-| v8.73 | Tick validation + elapsed cross-check (lirik tak lari laju) |
-| v8.72 | Anti-throttle robust (gesture resume + re-apply payload) |
+| **v8.70** | **Overlay gift-only semula (lirik kekal asing :4002) — 2 layer bebas susun** |
+| v8.69 | (Experimental) unified overlay — dibuang semula ikut preference host |
+| v8.68 | Auto-resume + retry play (Chrome power-save AbortError) |
+| v8.67 | Force muted via property (fix NotAllowedError autoplay) + play reject logging |
+| v8.66 | Max-channel luma key (warna saturated solid, tiada hijau bocor) |
+| v8.65 | Hybrid draw loop (effect jalan walau tab hidden/occluded) |
+| v8.64 | Effects Manager drag&drop + overlay tanpa card/border + layout v8.64 |
+| v8.63 | Gift effects tier system (local folder + luma key) + QuickControls |
+| v8.62a | Empty-response guards (5 layer) |
+| v8.74 | Green mode hide debug UI (lyrics overlay) |
+| v8.73 | Tick validation + elapsed cross-check |
+| v8.72 | Anti-throttle robust (gesture resume) |
 | v8.71 | Caption-language prior (fix Whisper English) |
-| v8.70 | Tajuk overlay center + max-width + slice 70 char |
-| v8.69 | Album/compilation detection + album mode hint |
-| v8.68 | Anti-throttle (silent audio + wake lock) |
-| v8.67 | Ambiguous title guard + MS corrections |
+| v8.70L | Tajuk overlay center + max-width |
+| v8.69L | Album/compilation detection + album mode |
+| v8.68L | Anti-throttle (silent audio + wake lock) |
 | v8.62 | Cache lirik kecil restore |
 | v8.61 | Dashboard lengkap + lead-in detector + CORS /music/ |
-| v8.60 | Fast path require exact match |
-| v8.59 | Full dashboard page.tsx |
-| v8.49 | Whisper Malay prompt + post-correction |
-| v8.45 | Emit STOPPED bila lagu tamat natural |
-| v8.44 | Smart LRCLIB GET + duration validation + gift overlay restore |
+
+*(L = lyrics server track)*
 
 ---
 
@@ -484,28 +480,22 @@ batia-os/
 ```powershell
 # 1. Clone + install
 git clone https://github.com/<username>/batia-os.git D:\batia-os
-cd D:\batia-os
-pnpm install
+cd D:\batia-os && pnpm install
 
-# 2. Setup (lihat Installation untuk detail)
-#    - .env dengan GROQ_API_KEY
-#    - tools/yt-dlp.exe + tools/cookies.txt
-#    - prisma db push
-#    - apps/web/public/effects/tier1|tier2|tier3/ (atau guna Effects Manager)
+# 2. Setup: .env (GROQ_API_KEY) + tools/yt-dlp.exe + tools/cookies.txt + prisma db push
 
 # 3. Run 3 terminal
-# Terminal 1: pnpm dev:orch
-# Terminal 2: cd apps/web && pnpm dev
-# Terminal 3: cd apps/orchestrator && npx tsx src/lyrics-server.ts
+# T1: pnpm dev:orch
+# T2: cd apps/web && pnpm dev
+# T3: cd apps/orchestrator && npx tsx src/lyrics-server.ts
 
-# 4. Dashboard
-#    localhost:3000 → CONNECT LIVE
-#    klik 🎬 → upload effect video drag&drop
-#    klik test gift → verify effect keluar tanpa background
+# 4. Dashboard localhost:3000 → CONNECT LIVE
+#    🎬 upload effect video (drag&drop) → Test GIFT verify
 
-# 5. TikTok Studio
-#    window capture :4002/?bg=green (lirik) + :3000/overlay?bg=green (gift)
-#    chroma key #00ff00
+# 5. TikTok Studio: 2 source Window Capture
+#    - lirik:  :4002/?bg=green  (shortcut Chrome anti-throttle)
+#    - gift:   :3000/overlay?bg=green (window sendiri)
+#    chroma key #00ff00 kedua-duanya, susun posisi bebas
 ```
 
 **Selamat berjaya, host! 🎤✨**
