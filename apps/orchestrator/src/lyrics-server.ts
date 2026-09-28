@@ -1,6 +1,5 @@
-// ✅ BATIA Lyrics Server v8.74 - port 4002
-// v8.74: green mode hide debug UI (no "sampah halus" in chroma)
-// v8.73: tick validation | v8.72: anti-throttle | v8.71: caption prior | v8.70: tajuk center | v8.69: album detect
+// ✅ BATIA Lyrics Server v8.81 - port 4002
+// v8.81: clamp offset ±6s + emit 100ms + frontend catch-up (cycle browser tak stuck)
 import http from "http";
 import path from "path";
 import fs from "fs";
@@ -11,11 +10,12 @@ import { Server as SocketServer } from "socket.io";
 import dotenv from "dotenv";
 const execFileAsync = promisify(execFile);
 
-const SERVER_VERSION = "8.74";
+const SERVER_VERSION = "8.81";
 const __dirname = path.dirname(new URL(import.meta.url).pathname).replace(/^\/([A-Z]:)/, "$1");
 dotenv.config({ path: path.resolve(__dirname, "../.env") });
 const LYRICS_PORT = 4002;
 const LYRICS_OFFSET_MS = parseInt(process.env.LYRICS_OFFSET_MS || "0", 10);
+const OFFSET_CLAMP_MS = 6000;
 const toolsDir = path.resolve(__dirname, "../../../tools");
 const musicDir = path.resolve(__dirname, "../audio/music");
 const lyricsDir = path.join(musicDir, "lyrics");
@@ -30,7 +30,7 @@ const EP_OVH = "https://api.lyrics.ovh/v1";
 const EP_GROQ = "https://api.groq.com/openai/v1/audio/transcriptions";
 const EP_YT = "https://www.youtube.com/watch?v=";
 const UA_BROWSER = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
-const UA_APP = "BATIA-OS/8.74 (lyrics bot; contact: local)";
+const UA_APP = "BATIA-OS/8.81 (lyrics bot; contact: local)";
 
 type Word = { w: string; a: number; b: number };
 type Line = { a: number; b: number; text: string; words: Word[] };
@@ -44,12 +44,20 @@ type SongState = {
 
 let current: SongState | null = null;
 console.log("[LYRICS] 🎤 Lyrics server v" + SERVER_VERSION + " - port", LYRICS_PORT);
-console.log("[LYRICS] 🧪 Test semua link: http://localhost:" + LYRICS_PORT + "/test");
 
-const HALLUCINATION_RE = /\b(thanks? for (watching|listening|viewing)|thank you for (watching|listening|viewing)|terima kasih (telah|kerana|sudah) (menonton|mendengar|menyokong)|please (like|subscribe|share|follow)|subscribe to (my|our) channel|like and subscribe|subtitles? by|captions? by|transcribed by|amara\.org|everything will be (fine|okay|ok|alright)|stay in the heart|in the cool|i('?m)? not a fool|you('?re)? not a fool|don'?t be afraid|see you (next time|soon)|until next time|have a nice day|good luck|www\.|https?:\/\/|please turn on|turn on (the )?(subtitles|captions)|^thank you\.?$|^thanks\.?$|^bye\.?$|^goodbye\.?$|^see you\.?$|^take care\.?$|^that'?s all\.?$|^the end\.?$|^ah ah ah|^oh oh oh|^la la la|^na na na)\b/i;
+function clampOffset(ms: number): number {
+  if (!Number.isFinite(ms)) return 0;
+  if (Math.abs(ms) > OFFSET_CLAMP_MS) {
+    console.log(`[LYRICS] 🛡️ Offset melampau ${ms}ms > ±${OFFSET_CLAMP_MS}ms - RESET ke 0`);
+    return 0;
+  }
+  return Math.round(ms);
+}
 
-function isBadLine(t: string): boolean {
-  if (/[\u0400-\u04FF\u0600-\u06FF\u4E00-\u9FFF\u3040-\u30FF\uAC00-\uD7AF\u0E00-\u0E7F]/.test(t)) return true;
+const HALLUCINATION_RE = /\b(thanks? for (watching|listening|viewing)|thank you for (watching|listening|viewing)|terima kasih (telah|kerana|sudah) (menonton|mendengar|menyokong)|please (like|subscribe|share|follow)|subscribe to (my|our) channel|like and subscribe|subtitles? by|captions? by|transcribed by|amara\.org|everything will be (fine|okay|ok|alright)|stay in the heart|i('?m)? not a fool|you('?re)? not a fool|don'?t be afraid|see you (next time|soon)|until next time|have a nice day|good luck|www\.|https?:\/\/|please turn on|turn on (the )?(subtitles|captions)|^thank you\.?$|^thanks\.?$|^bye\.?$|^goodbye\.?$|^see you\.?$|^take care\.?$|^that'?s all\.?$|^the end\.?$|^ah ah ah|^oh oh oh|^la la la|^na na na)\b/i;
+
+function isBadLine(t: string, allowCJK = false): boolean {
+  if (!allowCJK && /[\u0400-\u04FF\u0600-\u06FF\u4E00-\u9FFF\u3040-\u30FF\uAC00-\uD7AF\u0E00-\u0E7F]/.test(t)) return true;
   if (HALLUCINATION_RE.test(t)) return true;
   const trimmed = t.trim();
   if (trimmed.length <= 12 && /^(ah|oh|la|na|bye|thanks?|thank you|goodbye|see you|take care|the end|that'?s all)$/i.test(trimmed)) return true;
@@ -71,8 +79,8 @@ function cleanLine(t: string): string {
   return t.replace(/<[^>]+>/g, "").replace(/[♪♫]/g, "").replace(/\s+/g, " ").trim();
 }
 
-const MS_WORDS_RE = /\b(yang|dan|aku|kau|kamu|dia|mereka|kita|kami|saya|tak|tiada|bukan|ini|itu|hati|cinta|jiwa|rindu|sayang|kasih|malam|hari|bulan|bintang|mimpi|nyata|abadi|sejati|kejora|purnama|senja|embun|bayu|melur|kenanga|cempaka|seroja|nilam|baiduri|permata|delima|ratna|gita|nada|irama|dendang|seruling|zapin|inang|joget|selendang|songket|keris|wau|kenangan|hujan|pagi|petang|selalu|bila|kenapa|mengapa|bagaimana|semoga|hingga|sampai|kembali|pergi|tinggal|ingat|lupa|antara|dalam|pada|untuk|dengan|telah|sudah|belum|masih|akan|jangan|pernah|hanya|saja|sahaja|juga|pun|lah|nya|dari|oleh|kerana|karena|sebab|agar|supaya|walau|walaupun|meski|meskipun|jika|kalau|tuan|puan|abang|kakak|adik|teman|kawan|sahabat|cintaku|cintamu|sayangku|hatiku|jiwaku|diriku|dirimu|pulang|kampung|angin|api|air|tanah|langit|bumi|peluk|cium|airmata|menangis|tersenyum|berjalan|berlari|terbang|jatuh|bangkit|hidup|mati|syurga|tuhan|doa|restu|ibu|bapa|emak|ayah|merdeka|selamat|terima|mohon|ampun|maaf|syukur|lumrah|mudah|percaya|bersama|teratai|bunga|berseri|terpikat|alasanmu|mahligai|pujuk|selamanya|untukmu|meniti|suratan|setia|janji|hakikat|khianat|sanggup|takdir)\b/gi;
-const EN_WORDS_RE = /\b(the|and|you|your|yours|my|me|mine|we|us|our|they|them|their|he|she|him|her|is|are|was|were|been|being|have|has|had|do|does|did|will|would|can|could|should|may|might|must|shall|of|in|on|at|to|from|for|with|without|about|into|over|under|again|then|than|so|such|not|only|own|same|too|very|just|because|until|while|although|though|if|else|when|where|why|how|all|any|both|each|few|more|most|other|some|love|heart|eyes|night|day|dream|forever|always|never|together|away|back|home|life|world|sky|rain|sun|moon|star|remember|forget|stay|leave|hold|touch|feel|know|think|believe|hope|wish|wait|keep|give|take|make|break|fall|fly|run|walk|sing|dance|smile|cry|tears|kiss|warm|cold|bright|dark|light|shadow|silence|sound|voice|song|melody|music|beautiful|wonderful|amazing|broken|lost|found|free|wild|young|old|true|real|right|wrong|good|bad|better|best|worst|first|last|once|twice|every|another|enough|less|least|much|many|little|big|small|great|high|low|deep|wide|long|short|hard|soft|sweet|bitter|strong|weak|brave|afraid|scared|lonely|alone|happy|sad|glad|angry|calm|quiet|loud|slow|fast|quick|early|late|now|here|there|everywhere|nowhere|somewhere|anywhere|someone|somebody|anyone|anybody|everyone|everybody|nobody|nothing|something|anything|everything|person|gaze|morning)\b/gi;
+const MS_WORDS_RE = /\b(yang|dan|aku|kau|kamu|dia|mereka|kita|kami|saya|tak|tiada|bukan|ini|itu|hati|cinta|jiwa|rindu|sayang|kasih|malam|hari|bulan|bintang|mimpi|nyata|abadi|sejati|kejora|purnama|senja|embun|bayu|melur|kenanga|cempaka|seroja|nilam|baiduri|permata|delima|ratna|gita|nada|irama|dendang|seruling|zapin|inang|joget|selendang|songket|keris|wau|kenangan|hujan|pagi|petang|selalu|bila|kenapa|mengapa|bagaimana|semoga|hingga|sampai|kembali|pergi|tinggal|ingat|lupa|antara|dalam|pada|untuk|dengan|telah|sudah|belum|masih|akan|jangan|pernah|hanya|saja|sahaja|juga|pun|lah|nya|dari|oleh|kerana|karena|sebab|agar|supaya|walau|walaupun|meski|meskipun|jika|kalau|tuan|puan|abang|kakak|adik|teman|kawan|sahabat|cintaku|cintamu|sayangku|hatiku|jiwaku|diriku|dirimu|pulang|kampung|angin|api|air|tanah|langit|bumi|peluk|cium|airmata|menangis|tersenyum|berjalan|berlari|terbang|jatuh|bangkit|hidup|mati|syurga|tuhan|doa|restu|ibu|bapa|emak|ayah|merdeka|selamat|terima|mohon|ampun|maaf|syukur|lumrah|mudah|percaya|bersama|teratai|bunga|berseri|terpikat|alasanmu|mahligai|pujuk|selamanya|untukmu|meniti|suratan|setia|janji|hakikat|khianat|sanggup|takdir|sendiri|sepi|sunyi|gelisah|menunggu|harap|harapan|impian|bayang|bayangan|hilang|tinggalkan|melupakan|kenang|dendam|seribu|satu|dua|tiga|empat|lima|enam|tujuh|lapan|sembilan|sepuluh|ribu|juta|waktu|masa|tahun|detik|saat|akhir|awal|mula|mula-mula|dulu|dahulu|sekarang|esok|lusa|semalam|kelmarin|tadi|nanti|akan|ingin|mahu|sudi|rela|iklas|ikhlas|cuba|cubaan|nasib|untung|rugi|harga|nilai|erti|maksud|tanda|pesan|pesanan|nasihat|jalan|jalan-jalan|lorong|pasar|kota|desa|gunung|laut|pantai|sungai|tepi|tengah|atas|bawah|depan|belakang|sisi|sebelah|dalam|luar)\b/gi;
+const EN_WORDS_RE = /\b(the|and|you|your|yours|my|me|mine|we|us|our|they|them|their|he|she|him|her|is|are|was|were|been|being|have|has|had|do|does|did|will|would|can|could|should|may|might|must|shall|of|in|on|at|to|from|for|with|without|about|into|over|under|again|then|than|so|such|not|only|own|same|too|very|just|because|until|while|although|though|if|else|when|where|why|how|all|any|both|each|few|more|most|other|some|love|heart|eyes|night|day|dream|forever|always|never|together|away|back|home|life|world|sky|rain|sun|moon|star|remember|forget|stay|leave|hold|touch|feel|know|think|believe|hope|wish|wait|keep|give|take|make|break|fall|fly|run|walk|sing|dance|smile|cry|tears|kiss|warm|cold|bright|dark|light|shadow|silence|sound|voice|song|melody|music|beautiful|wonderful|amazing|broken|lost|found|free|wild|young|old|true|real|right|wrong|good|bad|better|best|worst|first|last|once|twice|every|another|enough|less|least|much|many|little|big|small|great|high|low|deep|wide|long|short|hard|soft|sweet|bitter|strong|weak|brave|afraid|scared|lonely|alone|happy|sad|glad|angry|calm|quiet|loud|slow|fast|quick|early|late|now|here|there|everywhere|nowhere|somewhere|anywhere|someone|somebody|anyone|anybody|everyone|everybody|nobody|nothing|something|anything|everything|person)\b/gi;
 
 function textLang(text: string): "ms" | "en" | "?" {
   const ms = (text.match(MS_WORDS_RE) || []).length;
@@ -164,7 +172,7 @@ function alignText(whisperLines: Line[], plainLines: string[]): { lines: Line[];
 
 function saveLyricsCache(videoId: string, data: { lines: Line[]; offsetMs: number; leadIn: number; source: string; lang: string }) {
   try {
-    fs.writeFileSync(path.join(lyricsDir, videoId + ".json"), JSON.stringify({ v: 1, ...data }));
+    fs.writeFileSync(path.join(lyricsDir, videoId + ".json"), JSON.stringify({ v: 1, ...data, offsetMs: clampOffset(data.offsetMs || 0) }));
   } catch (e) {}
 }
 
@@ -209,15 +217,15 @@ async function fetchWithRetry(url: string, options: RequestInit, label: string, 
     try {
       const res = await fetch(url, { ...options, signal: AbortSignal.timeout(timeoutMs) });
       if ((res.status === 503 || res.status === 502 || res.status === 429) && attempt < maxRetries) {
-        const delay = Math.min(1000 * attempt, 4000);
-        console.log(`[LYRICS] ⏳ ${label}: HTTP ${res.status} - retry ${attempt}/${maxRetries} (${delay}ms)...`);
+        const delay = Math.min(2000 * Math.pow(attempt, 1.5), 8000);
+        console.log(`[LYRICS] ⏳ ${label}: HTTP ${res.status} - retry ${attempt}/${maxRetries} (${delay.toFixed(0)}ms)...`);
         await new Promise((r) => setTimeout(r, delay));
         continue;
       }
       return res;
     } catch (e: any) {
       if (attempt < maxRetries) {
-        const delay = Math.min(1000 * attempt, 4000);
+        const delay = Math.min(2000 * Math.pow(attempt, 1.5), 8000);
         await new Promise((r) => setTimeout(r, delay));
       } else throw e;
     }
@@ -339,6 +347,7 @@ async function lrclibSearch(query: string, guess: string, videoDurationSec: numb
       const lLang = textLang(lyricsText.slice(0, 600));
       if ((guess === "ms" && lLang === "en") || (guess === "en" && lLang === "ms")) continue;
       if (lLang === guess && guess !== "?") score += 2;
+      if (guess === "?" && lLang === "ms") score += 1;
       if (nExpected && nExpected.length > 3) {
         const artistTokens = nExpected.split(" ").filter((t) => t.length > 2);
         if (artistTokens.some((t) => na.includes(t))) score += 2;
@@ -424,36 +433,66 @@ async function transcribeWhisper(videoId: string, guess: string): Promise<Line[]
     const f = fs.readdirSync(musicDir).find((x) => x.startsWith(videoId + ".") && /\.(m4a|mp4|mp3|webm|opus)$/i.test(x));
     if (f) file = path.join(musicDir, f);
   } catch (e) {}
-  if (!file || !fs.existsSync(file)) return [];
+  if (!file || !fs.existsSync(file)) { console.log(`[LYRICS] ⏭️ Whisper: audio file tak jumpa`); return []; }
   const size = fs.statSync(file).size;
-  if (size > 24 * 1024 * 1024) { console.log(`[LYRICS] ⏭️ Whisper skip: file ${(size / 1024 / 1024).toFixed(1)}MB > 24MB (limit Groq) - biasa untuk album/compilation`); return []; }
+  if (size > 24 * 1024 * 1024) { console.log(`[LYRICS] ⏭️ Whisper skip: file ${(size / 1024 / 1024).toFixed(1)}MB > 24MB`); return []; }
+  if (size < 5000) { console.log(`[LYRICS] ⏭️ Whisper skip: file terlalu kecil`); return []; }
   const key = process.env.GROQ_API_KEY || "";
-  if (!key) return [];
+  if (!key) { console.log(`[LYRICS] ⏭️ Whisper: GROQ_API_KEY tak ada`); return []; }
   try {
     const start = Date.now();
     const buf = fs.readFileSync(file);
     const ext = path.extname(file).toLowerCase();
-    const mime = ext === ".m4a" ? "audio/mp4" : ext === ".mp3" ? "audio/mpeg" : ext === ".webm" ? "audio/webm" : ext === ".opus" ? "audio/opus" : "audio/mp4";
-    const form = new FormData();
-    form.append("file", new Blob([buf], { type: mime }), videoId + ext);
-    form.append("model", "whisper-large-v3");
-    form.append("response_format", "verbose_json");
-    form.append("temperature", "0");
-    form.append("timestamp_granularities[]", "segment");
-    if (guess === "ms") form.append("language", "ms");
-    else if (guess === "en") form.append("language", "en");
-    if (guess === "ms") form.append("initial_prompt", "Lagu Melayu. Perkataan: yang, dan, aku, kau, hati, cinta, jiwa, rindu, dunia, hidup, mati, malam, siang, langit, bumi, angin, hujan, kasih, sayang, lumrah, mudah, bersama, percaya, kerana, selalu, sendiri, sepi, sunyi, indah, derita, luka, pedih, air mata, kenangan, jemari, bayangan, takdir, harapan, teratai, bunga, berseri, terpikat, alasanmu, mahligai, pujuk, melepaskanmu, selamanya, untukmu, meniti, suratan, setia, janji.");
-    const res = await fetchWithRetry(EP_GROQ, {
-      method: "POST", headers: { Authorization: "Bearer " + key }, body: form,
+    const mimeMap: Record<string, string> = {
+      ".m4a": "audio/mp4", ".mp4": "audio/mp4", ".mp3": "audio/mpeg",
+      ".webm": "audio/webm", ".opus": "audio/opus", ".wav": "audio/wav",
+    };
+    const mime = mimeMap[ext] || "audio/mpeg";
+
+    const MS_PROMPT = "Lagu Melayu. Perkataan: yang, dan, aku, kau, hati, cinta, jiwa, rindu, dunia, hidup, mati, malam, siang, langit, bumi, angin, hujan, kasih, sayang, lumrah, mudah, bersama, percaya, kerana, selalu, sendiri, sepi, sunyi, indah, derita, luka, pedih, air mata, kenangan, jemari, bayangan, takdir, harapan, teratai, bunga, berseri, terpikat, alasanmu, mahligai, pujuk, melepaskanmu, selamanya, untukmu, meniti, suratan, setia, janji.";
+    const buildForm = (withPrompt: boolean) => {
+      const f = new FormData();
+      f.append("file", new Blob([buf], { type: mime }), videoId + ext);
+      f.append("model", "whisper-large-v3");
+      f.append("response_format", "verbose_json");
+      f.append("temperature", "0");
+      if (guess === "ms") f.append("language", "ms");
+      else if (guess === "en") f.append("language", "en");
+      if (withPrompt && guess === "ms") f.append("initial_prompt", MS_PROMPT);
+      return f;
+    };
+
+    console.log(`[LYRICS] 🎤 Whisper call: ${(size / 1024 / 1024).toFixed(2)}MB, mime=${mime}, lang=${guess}`);
+    let res = await fetchWithRetry(EP_GROQ, {
+      method: "POST", headers: { Authorization: "Bearer " + key }, body: buildForm(true),
     }, "Whisper", 45000, 2);
-    if (!res.ok) { console.log(`[LYRICS] ❌ Whisper: HTTP ${res.status}`); return []; }
+    if (!res.ok && res.status === 400) {
+      const body0 = await res.text().catch(() => "");
+      if (/initial_prompt|unknown param/i.test(body0)) {
+        console.log(`[LYRICS] ⚠️ Groq tolak initial_prompt - retry tanpa prompt`);
+        res = await fetchWithRetry(EP_GROQ, {
+          method: "POST", headers: { Authorization: "Bearer " + key }, body: buildForm(false),
+        }, "Whisper-retry", 45000, 2);
+      } else {
+        console.log(`[LYRICS] ❌ Whisper: HTTP 400 - ${body0.slice(0, 200)}`);
+        return [];
+      }
+    }
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      console.log(`[LYRICS] ❌ Whisper: HTTP ${res.status} - ${body.slice(0, 200)}`);
+      return [];
+    }
     const data: any = await res.json();
     const segs: any[] = Array.isArray(data.segments) ? data.segments : [];
+    const dl0 = String(data.language || "").toLowerCase();
+    const allowCJK = dl0 === "ja" || dl0 === "zh" || dl0 === "ko";
+    if (allowCJK) console.log(`[LYRICS] 🈁 Whisper detect ${dl0}`);
     let lines: Line[] = [];
     let skipped = 0;
     for (const s of segs) {
       const rawText = cleanLine(String(s.text || ""));
-      if (!rawText || isBadLine(rawText)) { skipped++; continue; }
+      if (!rawText || isBadLine(rawText, allowCJK)) { skipped++; continue; }
       const text = applyCorrections(rawText, guess);
       const a = Math.round((s.start || 0) * 1000);
       const b = Math.round((s.end || s.start || 0) * 1000);
@@ -463,8 +502,7 @@ async function transcribeWhisper(videoId: string, guess: string): Promise<Line[]
     }
     let songLang: "ms" | "en" | "?" = guess !== "?" ? guess : textLang(lines.map((l) => l.text).join(" "));
     if (songLang === "?") {
-      const dl = String(data.language || "").toLowerCase();
-      songLang = dl.startsWith("ms") || dl.startsWith("id") ? "ms" : dl === "en" ? "en" : "?";
+      songLang = dl0.startsWith("ms") || dl0.startsWith("id") ? "ms" : dl0 === "en" ? "en" : "?";
     }
     if (songLang !== "?") {
       const before = lines.length;
@@ -474,17 +512,23 @@ async function transcribeWhisper(videoId: string, guess: string): Promise<Line[]
     const msCount = lines.filter((l) => textLang(l.text) === "ms").length;
     const enCount = lines.filter((l) => textLang(l.text) === "en").length;
     if (msCount > 0 && enCount > 0 && (enCount / Math.max(1, lines.length)) > 0.25) {
-      console.log(`[LYRICS] ❌ Whisper REJECT: campur bahasa (${msCount} MS, ${enCount} EN)`);
+      console.log(`[LYRICS] ❌ Whisper REJECT: campur bahasa`);
       return [];
     }
     if (guess === "ms" && msCount === 0 && enCount > 0) {
       console.log(`[LYRICS] ❌ Whisper REJECT: output full English walau context MS`);
       return [];
     }
-    if (isInsufficientLyrics(lines)) return [];
-    console.log(`[LYRICS] ✅ Whisper: ${lines.length} baris (${((Date.now() - start) / 1000).toFixed(1)}s)`);
+    if (isInsufficientLyrics(lines)) {
+      console.log(`[LYRICS] ⚠️ Whisper insufficient: ${lines.length} baris`);
+      return [];
+    }
+    console.log(`[LYRICS] ✅ Whisper: ${lines.length} baris (${((Date.now() - start) / 1000).toFixed(1)}s, skipped=${skipped})`);
     return ensureWords(lines);
-  } catch (e: any) { return []; }
+  } catch (e: any) {
+    console.log(`[LYRICS] ❌ Whisper exception: ${e.message || e}`);
+    return [];
+  }
 }
 
 async function loadLyrics(videoId: string, dashboardQuery: string) {
@@ -506,7 +550,7 @@ async function loadLyrics(videoId: string, dashboardQuery: string) {
       const raw = JSON.parse(fs.readFileSync(cf, "utf8"));
       if (raw.source === "LYRIST") {
         try { fs.unlinkSync(cf); } catch (e) {}
-        console.log(`[LYRICS] 🧹 Cache LYRIST dibuang (timing rata) - fetch semula`);
+        console.log(`[LYRICS] 🧹 Cache LYRIST dibuang - fetch semula`);
       } else {
         const cachedLines: Line[] = Array.isArray(raw.lines) ? raw.lines : [];
         const correctedLines = cachedLines.map((l: Line) => ({ ...l, text: applyCorrections(l.text, raw.lang === "en" ? "en" : "ms") }));
@@ -514,14 +558,19 @@ async function loadLyrics(videoId: string, dashboardQuery: string) {
         const cleaned = ensureWords(correctedLines.filter((l) => !isBadLine(l.text)));
         if (changed && !isInsufficientLyrics(cleaned)) {
           saveLyricsCache(videoId, { lines: cleaned, offsetMs: raw.offsetMs || 0, leadIn: raw.leadIn || 0, source: raw.source || "CACHE", lang: raw.lang || "?" });
-          console.log(`[LYRICS] 🔧 Cache auto-corrected (${videoId})`);
+          console.log(`[LYRICS] 🔧 Cache auto-corrected`);
         }
         if (!isInsufficientLyrics(cleaned)) {
           if (alive()) {
-            current!.offsetMs = raw.offsetMs || 0;
+            const rawOff = Number(raw.offsetMs) || 0;
+            current!.offsetMs = clampOffset(rawOff);
+            if (current!.offsetMs !== rawOff) {
+              console.log(`[LYRICS] 🛡️ Offset cache rosak ${rawOff}ms → RESET ke 0`);
+              saveLyricsCache(videoId, { lines: cleaned, offsetMs: 0, leadIn: raw.leadIn || 0, source: raw.source || "CACHE", lang: raw.lang || "?" });
+            }
             current!.leadIn = raw.leadIn || 0;
             finish(cleaned, raw.source || "CACHE", raw.lang || "?", false);
-            console.log(`[LYRICS] ⚡ CACHE lirik hit: ${cleaned.length} baris (src ${raw.source}, off ${raw.offsetMs || 0}ms, lead ${raw.leadIn || 0}ms) - INSTANT | baris1: "${(cleaned[0]?.text || "").slice(0, 50)}"`);
+            console.log(`[LYRICS] ⚡ CACHE hit: ${cleaned.length} baris (src ${raw.source}, off ${current!.offsetMs}ms, lead ${current!.leadIn}ms) - INSTANT`);
           }
           return;
         }
@@ -538,9 +587,9 @@ async function loadLyrics(videoId: string, dashboardQuery: string) {
   if (!alive()) return;
   const ytLines = ytRes.lines;
   const captionLangs = ytRes.langs || [];
-  if (guess === "?" && captionLangs.length > 0) {
-    if (captionLangs.some((c) => c.startsWith("ms") || c.startsWith("id"))) { guess = "ms"; console.log(`[LYRICS] 🌐 Caption prior: ms`); }
-    else if (captionLangs.every((c) => c.startsWith("en"))) { guess = "en"; console.log(`[LYRICS] 🌐 Caption prior: en`); }
+  if (guess === "?" && captionLangs.some((c) => c.startsWith("ms") || c.startsWith("id"))) {
+    guess = "ms";
+    console.log(`[LYRICS] 🌐 Caption prior: ms`);
   }
   const rawTitle = meta?.title || dashboardQuery || videoId;
   const channel = meta?.channel || "";
@@ -549,15 +598,24 @@ async function loadLyrics(videoId: string, dashboardQuery: string) {
   if (current) current.title = artist ? `${artist} - ${title}` : title;
   if (/\b(full album|album penuh|compilation|koleksi|playlist|lagu-lagu|best of|greatest hits|nonstop|non-stop|medley)\b/i.test(rawTitle + " " + dashboardQuery)) {
     finish([], "ALBUM", guess, false);
-    console.log(`[LYRICS] 💿 Album/compilation dikesan ("${rawTitle.slice(0, 50)}") - request lagu single untuk lirik`);
+    console.log(`[LYRICS] 💿 Album dikesan`);
     return;
   }
   if (guess === "?") guess = textLang(title + " " + artist);
   if (current) current.lang = guess;
 
+  let lastResortCaptions: Line[] | null = null;
   if (ytLines && ytLines.length > 0) {
     const filtered = guess !== "?" ? filterLinesByLang(ytLines, guess) : ytLines;
-    if (!isInsufficientLyrics(filtered)) { finish(filtered, "YT-TRANSCRIPT", guess, true); return; }
+    if (!isInsufficientLyrics(filtered)) {
+      const capLang = textLang(filtered.map((l) => l.text).join(" "));
+      if (guess === "?" && capLang === "en") {
+        lastResortCaptions = filtered;
+      } else {
+        finish(filtered, "YT-TRANSCRIPT", guess, true);
+        return;
+      }
+    }
   }
 
   if (artist && title && videoDuration > 0) {
@@ -589,9 +647,14 @@ async function loadLyrics(videoId: string, dashboardQuery: string) {
     if (plainText) {
       const plainLines = plainText.split("\n").map((s) => cleanLine(s)).filter((s) => s.length > 0);
       const { lines: fixed, replaced } = alignText(whisperLines, plainLines);
-      if (replaced > 0) { console.log(`[LYRICS] 🔧 Text-replacement: ${replaced} baris dibetulkan`); finalLines = ensureWords(fixed); }
+      if (replaced > 0) { console.log(`[LYRICS] 🔧 Text-replacement: ${replaced} baris`); finalLines = ensureWords(fixed); }
     }
     finish(finalLines, "WHISPER", guess, true);
+    return;
+  }
+
+  if (lastResortCaptions && lastResortCaptions.length > 0) {
+    finish(lastResortCaptions, "YT-TRANSCRIPT", "en", true);
     return;
   }
 
@@ -603,6 +666,23 @@ async function loadLyrics(videoId: string, dashboardQuery: string) {
       return;
     }
   }
+
+  try {
+    const cf2 = path.join(lyricsDir, videoId + ".json");
+    if (fs.existsSync(cf2)) {
+      const raw2 = JSON.parse(fs.readFileSync(cf2, "utf8"));
+      const cachedLines2: Line[] = Array.isArray(raw2.lines) ? raw2.lines : [];
+      if (cachedLines2.length >= 5) {
+        console.log(`[LYRICS] ♻️ Cache fallback hit`);
+        if (alive()) {
+          current!.offsetMs = clampOffset(Number(raw2.offsetMs) || 0);
+          current!.leadIn = raw2.leadIn || 0;
+          finish(cachedLines2, raw2.source || "CACHE", raw2.lang || "?", false);
+        }
+        return;
+      }
+    }
+  } catch (e) {}
 
   finish([], "", guess, false);
   console.log(`[LYRICS] ❌ Tiada lirik untuk ${videoId}`);
@@ -637,10 +717,7 @@ socket.on("music:tick", (d: any) => {
     if (current.lastTickAt && current.frontendElapsed !== undefined) {
       const dWall = now - current.lastTickAt;
       const dEl = d.elapsed - current.frontendElapsed;
-      if (dWall > 400 && dEl >= 0 && (dEl / dWall > 2 || dEl / dWall < 0.5)) {
-        console.log(`[LYRICS] 🛡️ Tick reject: ratio ${(dEl / dWall).toFixed(2)}x (elapsed lari dari masa sebenar)`);
-        return;
-      }
+      if (dWall > 400 && dEl >= 0 && (dEl / dWall > 2 || dEl / dWall < 0.5)) return;
     }
     current.frontendElapsed = d.elapsed;
     current.lastTickAt = now;
@@ -649,13 +726,13 @@ socket.on("music:tick", (d: any) => {
 socket.on("music:leadin", (d: any) => {
   if (!current || !d || current.videoId !== d.videoId) return;
   current.leadIn = Math.max(0, Math.min(15000, Number(d.ms) || 0));
-  console.log(`[LYRICS] ⏱️ Lead-in diterima: ${current.leadIn}ms`);
+  console.log(`[LYRICS] ⏱️ Lead-in: ${current.leadIn}ms`);
   if (current.lines.length > 0) saveLyricsCache(current.videoId, { lines: current.lines, offsetMs: current.offsetMs, leadIn: current.leadIn, source: current.source, lang: current.lang });
 });
 socket.on("lyrics:offset", (d: any) => {
   if (!current) return;
   const delta = Number(d && d.delta) || 0;
-  current.offsetMs = (current.offsetMs || 0) + delta;
+  current.offsetMs = clampOffset((current.offsetMs || 0) + delta);
   console.log(`[LYRICS] ⚙️ Offset: ${current.offsetMs > 0 ? "+" : ""}${current.offsetMs}ms`);
   if (current.lines.length > 0) saveLyricsCache(current.videoId, { lines: current.lines, offsetMs: current.offsetMs, leadIn: current.leadIn, source: current.source, lang: current.lang });
 });
@@ -673,11 +750,13 @@ function computePayload(): any {
   let prev: Line | null = null;
   let line: Line | null = null;
   let next: Line | null = null;
-  if (current.hasLyrics) {
+  const lastLineEnd = current.hasLyrics && current.lines.length > 0 ? current.lines[current.lines.length - 1].b : 0;
+  const lyricsDone = current.hasLyrics && lastLineEnd > 0 && elapsed > lastLineEnd + 8000;
+  if (current.hasLyrics && !lyricsDone) {
     const idx = current.lines.findIndex((l) => elapsed >= l.a && elapsed < l.b);
     if (idx >= 0) { line = current.lines[idx]; prev = current.lines[idx - 1] || null; next = current.lines[idx + 1] || null; }
   }
-  return { v: SERVER_VERSION, playing: true, title: current.title, elapsed, hasLyrics: current.hasLyrics, loading: current.loading, prev, line, next, sync: tickFresh, offsetMs: current.offsetMs || 0, leadIn: lead, source: current.source || "", lang: current.lang || "" };
+  return { v: SERVER_VERSION, playing: true, title: current.title, elapsed, hasLyrics: current.hasLyrics, loading: current.loading, prev, line, next, sync: tickFresh, offsetMs: current.offsetMs || 0, leadIn: lead, source: current.source || "", lang: current.lang || "", lyricsDone };
 }
 
 const OVERLAY_HTML = `<!doctype html>
@@ -718,7 +797,6 @@ const OVERLAY_HTML = `<!doctype html>
 <script>
   const PAGE_VERSION = "@@V@@";
   const q = new URLSearchParams(location.search);
-  // ✅ v8.74: detect green mode untuk hide debug UI
   const GREEN_MODE = q.get("bg") === "green";
   if (GREEN_MODE) document.body.style.background = "#00ff00";
   const elBox = document.getElementById("lyrBox");
@@ -730,29 +808,46 @@ const OVERLAY_HTML = `<!doctype html>
   const elLoad = document.getElementById("load");
   const elVer = document.getElementById("ver");
   const elAnti = document.getElementById("anti");
-  // ✅ v8.74: hide version badge dalam chroma mode (elak sampah halus dalam live)
   if (GREEN_MODE) { elVer.style.display = "none"; }
   let lastText = "";
   let wordSpans = [];
   let fadeTimer = null;
+  let lastPayload = null;
+  let lastPayloadAt = 0;
+  let lastRenderAt = 0;
 
   let keepCtx = null;
+  let keepAudio = null;
+  const SILENT_WAV = "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQQAAAAAAAAA";
   function startKeepAlive() {
+    let ok = false;
     try {
       const AC = window.AudioContext || window.webkitAudioContext;
-      if (!AC) return false;
-      if (!keepCtx) {
-        keepCtx = new AC();
-        const osc = keepCtx.createOscillator();
-        const gain = keepCtx.createGain();
-        gain.gain.value = 0.001;
-        osc.connect(gain);
-        gain.connect(keepCtx.destination);
-        osc.start();
+      if (AC) {
+        if (!keepCtx) {
+          keepCtx = new AC();
+          const osc = keepCtx.createOscillator();
+          const gain = keepCtx.createGain();
+          gain.gain.value = 0.001;
+          osc.connect(gain);
+          gain.connect(keepCtx.destination);
+          osc.start();
+        }
+        if (keepCtx.state === "suspended") keepCtx.resume().catch(() => {});
+        ok = keepCtx.state === "running";
       }
-      if (keepCtx.state === "suspended") keepCtx.resume().catch(() => {});
-      return keepCtx.state === "running";
-    } catch (e) { return false; }
+    } catch (e) {}
+    try {
+      if (!keepAudio) {
+        keepAudio = new Audio(SILENT_WAV);
+        keepAudio.loop = true;
+        keepAudio.volume = 0.01;
+      }
+      const p = keepAudio.play();
+      if (p && p.catch) p.catch(() => {});
+      if (!keepAudio.paused) ok = true;
+    } catch (e) {}
+    return ok;
   }
   function updateAnti() {
     const ok = startKeepAlive();
@@ -760,7 +855,6 @@ const OVERLAY_HTML = `<!doctype html>
     return ok;
   }
   updateAnti();
-  setInterval(updateAnti, 5000);
   ["pointerdown", "keydown", "touchstart"].forEach((ev) => window.addEventListener(ev, () => { startKeepAlive(); updateAnti(); }));
 
   try {
@@ -780,8 +874,27 @@ const OVERLAY_HTML = `<!doctype html>
     });
   }
 
-  let lastPayload = null;
+  function elapsedNow() {
+    if (!lastPayload || !lastPayload.playing) return 0;
+    return lastPayload.elapsed + (performance.now() - lastPayloadAt);
+  }
+  function highlightWords() {
+    if (!lastPayload || !lastPayload.hasLyrics || !lastPayload.line) return;
+    const e = elapsedNow();
+    const ws = lastPayload.line.words || [];
+    for (let i = 0; i < wordSpans.length; i++) {
+      const w = ws[i]; if (!w) continue;
+      const cls = "w" + (e >= w.b ? " done" : e >= w.a ? " now" : "");
+      if (wordSpans[i].className !== cls) wordSpans[i].className = cls;
+    }
+  }
+  function rafLoop() { highlightWords(); requestAnimationFrame(rafLoop); }
+  requestAnimationFrame(rafLoop);
+
   function renderPayload(d) {
+    lastPayload = d;
+    lastPayloadAt = performance.now();
+    lastRenderAt = performance.now();
     if (d.v && d.v !== PAGE_VERSION) { location.reload(); return; }
     elVer.textContent = "v" + PAGE_VERSION + (d.source ? " | " + d.source : "") + (d.lang ? " | " + d.lang : "") + (d.leadIn ? " | lead " + d.leadIn + "ms" : "") + (d.offsetMs ? " | off " + (d.offsetMs > 0 ? "+" : "") + d.offsetMs + "ms" : "");
     if (!d.playing) {
@@ -797,7 +910,6 @@ const OVERLAY_HTML = `<!doctype html>
     elTitle.style.display = "block";
     elTitle.textContent = "🎵 " + (d.title.length > 70 ? d.title.slice(0, 70) + "…" : d.title);
     elBox.classList.add("on");
-    // ✅ v8.74: hide loading indicator dalam chroma mode
     elLoad.style.display = (GREEN_MODE || !d.loading) ? "none" : "block";
     if (!d.hasLyrics) {
       elLine.innerHTML = ""; elLine.className = "";
@@ -805,6 +917,17 @@ const OVERLAY_HTML = `<!doctype html>
       elHint.textContent = d.source === "ALBUM" ? "💿 album mode - request lagu single untuk lirik" : "♪ instrumental ♪";
       elHint.style.display = "block";
       lastText = ""; wordSpans = [];
+      return;
+    }
+    if (d.lyricsDone) {
+      if (lastText && !fadeTimer) {
+        elLine.className = "out";
+        fadeTimer = setTimeout(() => {
+          elLine.innerHTML = ""; elLine.className = "";
+          elPrev.textContent = ""; elNext.textContent = "";
+          lastText = ""; wordSpans = []; fadeTimer = null;
+        }, 600);
+      }
       return;
     }
     elHint.style.display = "none";
@@ -818,11 +941,7 @@ const OVERLAY_HTML = `<!doctype html>
         buildWords(d.line.words);
         elLine.className = ""; void elLine.offsetWidth; elLine.className = "on";
       }
-      const ws = d.line.words || [];
-      wordSpans.forEach((sp, i) => {
-        const w = ws[i]; if (!w) return;
-        sp.className = "w" + (d.elapsed >= w.b ? " done" : d.elapsed >= w.a ? " now" : "");
-      });
+      highlightWords();
     } else if (lastText) {
       if (!fadeTimer) {
         elLine.className = "out";
@@ -834,12 +953,32 @@ const OVERLAY_HTML = `<!doctype html>
     }
   }
 
+  // ✅ v8.81: setInterval 250ms - catch-up walau hidden throttle
+  setInterval(() => {
+    updateAnti();
+    if (lastPayload) {
+      const now = performance.now();
+      if (now - lastRenderAt > 1000 && lastPayload.playing && lastPayload.hasLyrics && lastPayload.line) {
+        if (lastText === (lastPayload.line.text || "")) highlightWords();
+      }
+      renderPayload(lastPayload);
+    }
+  }, 250);
+
   const s = io();
-  s.on("lyrics:update", (d) => { lastPayload = d; renderPayload(d); });
+  s.on("lyrics:update", (d) => { renderPayload(d); });
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") {
       updateAnti();
-      if (lastPayload) renderPayload(lastPayload);
+      // ✅ v8.81: FORCE CATCH-UP bila tab wake dari freeze
+      if (lastPayload) {
+        if (lastPayload.playing && lastPayload.hasLyrics && lastPayload.line) {
+          lastText = "";
+          wordSpans = [];
+        }
+        renderPayload(lastPayload);
+      }
+      try { s.emit("lyrics:request"); } catch (e) {}
     }
   });
   s.on("connect", () => { if (lastPayload) renderPayload(lastPayload); });
@@ -873,7 +1012,7 @@ const server = http.createServer(async (req, res) => {
     const u = new URL(url, "http://x");
     const delta = parseInt(u.searchParams.get("delta") || "0", 10);
     if (current && delta) {
-      current.offsetMs = (current.offsetMs || 0) + delta;
+      current.offsetMs = clampOffset((current.offsetMs || 0) + delta);
       if (current.lines.length > 0) saveLyricsCache(current.videoId, { lines: current.lines, offsetMs: current.offsetMs, leadIn: current.leadIn, source: current.source, lang: current.lang });
       console.log(`[LYRICS] ⚙️ Offset via URL: ${current.offsetMs > 0 ? "+" : ""}${current.offsetMs}ms`);
     }
@@ -898,6 +1037,11 @@ const server = http.createServer(async (req, res) => {
 });
 
 const ioLyrics = new SocketServer(server, { cors: { origin: "*" } });
-ioLyrics.on("connection", (cli) => { cli.emit("lyrics:update", computePayload()); });
-setInterval(() => { ioLyrics.emit("lyrics:update", computePayload()); }, 400);
+ioLyrics.on("connection", (cli) => {
+  cli.emit("lyrics:update", computePayload());
+  // ✅ v8.81: client boleh request fresh state bila wake dari freeze
+  cli.on("lyrics:request", () => { cli.emit("lyrics:update", computePayload()); });
+});
+// ✅ v8.81: emit 100ms (lebih agresif - tab wake up terus dapat fresh state)
+setInterval(() => { ioLyrics.emit("lyrics:update", computePayload()); }, 100);
 server.listen(LYRICS_PORT, () => console.log(`[LYRICS] 🌐 Overlay lirik: http://localhost:${LYRICS_PORT}  (green: ?bg=green)`));
