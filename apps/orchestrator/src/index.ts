@@ -22,7 +22,7 @@ const policyPath = path.resolve(__dirname, "../../../policies/tiktok_my_2026.yam
 const engine = new LiveContextEngine(new PolicyEngine(policyPath));
 
 console.log("[EVENTS] WS_EVENTS =", JSON.stringify(WS_EVENTS));
-console.log("[BUILD] BATIA v8.62a - empty response guards (TTS tak cakap default bila AI kosong)");
+console.log("[BUILD] BATIA v8.62a + Instant Google TTS Fallback (No Retry Delay)");
 
 try {
   const audioDir = path.join(process.cwd(), "audio");
@@ -83,10 +83,31 @@ function cleanAiOutput(text: string): string {
   return c;
 }
 function isValidUsername(u: string): boolean { return !(!u || u === "0" || u === "unknown" || u.length < 3); }
-function cleanSongTitle(q: string): string {
-  return q.replace(/^["'""''\s]+|["'""''\s]+$/g, "").replace(/^[-–—:\s]+|[-–—:\s]+$/g, "")
-    .replace(/\s*\([^)]*\)\s*/g, " ").replace(/\s*oleh\s+.+$/i, "").replace(/\s*by\s+.+$/i, "")
-    .replace(/\s*feat\.?\s+.+$/i, "").replace(/\s*-\s*.*$/, "").replace(/\s+/g, " ").trim();
+
+function sanitizeSongQuery(raw: string, username: string): string {
+  let q = String(raw || "");
+  q = q.replace(/@[a-zA-Z0-9_.]+/g, " ");
+  q = q.replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}]/gu, " ");
+  q = q.replace(/\b(mainkan|play|pasang|putar|nyanyikan|nyanyi|request|req|minta|nak|boleh|tolong|sila|please|pls|plz|bagi|dong|jom|hendak|mahu)\b/gi, " ");
+  q = q.replace(/^\s*lagu\b/i, " ");
+  q = q.replace(/\b(olan|olang|oii|oi|eh|ah|yah|yuk|kot|entah|tah|kotak|guys|guys?\b|bro|sis|kak|abang|bang|kakak|admin|host)\b/gi, " ");
+  const uTokens = String(username || "").toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length > 2);
+  if (uTokens.length) {
+    q = q.split(/\s+/).filter((w) => !uTokens.includes(w.toLowerCase())).join(" ");
+  }
+  q = q.replace(/\s+/g, " ").trim();
+  if (!q) q = String(raw || "").replace(/\s+/g, " ").trim();
+  if (q.length > 60) q = q.slice(0, 60).trim();
+  return q;
+}
+
+function titleCoverage(q: string, downloadedTitle: string): number {
+  const qt = q.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter((t) => t.length > 2);
+  const dt = (downloadedTitle || "").toLowerCase();
+  if (!qt.length) return 1;
+  let hit = 0;
+  for (const t of qt) if (dt.includes(t)) hit++;
+  return hit / qt.length;
 }
 
 const SLANG_RE = /\b(punch\s*card|pc|heart\s*me|heartme|hati\s*oren|love\s*oren|tap\s*tap\s*love|tap\s*skrin|tap\s*screen|beg\s*kuning|beg\s*shopping|fyp|f4f|l4l|pk\s*battle|join\s*battle)\b/gi;
@@ -118,6 +139,7 @@ const tts = new TtsEngine();
 let currentTtsVoice = "ms-MY-YasminNeural";
 const ttsQueue: Array<{ text: string; voiceName: string; lang: string; resolve: (u: string) => void; reject: (e: any) => void }> = [];
 let ttsBusy = false;
+
 async function processTtsQueue() {
   if (ttsBusy) return;
   ttsBusy = true;
@@ -128,30 +150,38 @@ async function processTtsQueue() {
         console.log(`[TTS QUEUE] Setting voice to: ${job.voiceName}`);
         await tts.setVoice(job.voiceName);
         await new Promise(r => setTimeout(r, 150));
-        job.resolve(await tts.speak(job.text, job.voiceName));
-      } catch (e) { job.reject(e); }
+        
+        // 🔥 TIADA RETRY LOOP - TtsEngine.ts dah handle instant fallback
+        const audioUrl = await tts.speak(job.text, job.voiceName);
+        
+        if (audioUrl) {
+          // Tambah cache buster sekali sahaja
+          const finalUrl = audioUrl.includes('?') ? audioUrl : `${audioUrl}?t=${Date.now()}`;
+          console.log(`[TTS] ✅ Success: ${finalUrl}`);
+          job.resolve(finalUrl);
+        } else {
+          console.error(`[TTS] ❌ TTS failed (no audio returned)`);
+          job.reject(new Error("TTS failed"));
+        }
+      } catch (e) { 
+        console.error(`[TTS] ❌ TTS error:`, e);
+        job.reject(e); 
+      }
     }
   }
   ttsBusy = false;
 }
 
 function ttsNormalize(t: string): string {
-  return t
-    .replace(/[@_.]/g, " ")
-    .replace(/\bqueues?\b/gi, "kiu")
-    .replace(/\babam\b/gi, "Abang")
-    .replace(/\s+/g, " ")
-    .trim();
+  return t.replace(/[@_.]/g, " ").replace(/\bqueues?\b/gi, "kiu").replace(/\babam\b/gi, "Abang").replace(/\s+/g, " ").trim();
 }
 
 async function speakMixed(text: string, forceLang?: "MS" | "EN"): Promise<string> {
-  // ✅ v8.62a: guard - JANGAN cakap kalau AI return empty
   if (!text || text.trim().length === 0) {
     console.log("[TTS] ⏭️ Skip: AI return empty response - tak cakap apa-apa");
     return "";
   }
   const cleaned = ttsNormalize(cleanAiOutput(text));
-  // ✅ v8.62a: double-check lepas normalize (kalau semua kena trim jadi kosong)
   if (!cleaned || cleaned.length === 0) {
     console.log("[TTS] ⏭️ Skip: response kosong lepas normalize");
     return "";
@@ -166,13 +196,7 @@ async function speakMixed(text: string, forceLang?: "MS" | "EN"): Promise<string
   
   console.log("[TTS SPEAK]", lang, "voice=" + voiceToUse + ":", cleaned.slice(0, 100));
   return new Promise((resolve, reject) => {
-    ttsQueue.push({ 
-      text: lang === "MS" ? normalizeMs(cleaned) : cleaned, 
-      voiceName: voiceToUse,
-      lang, 
-      resolve, 
-      reject 
-    });
+    ttsQueue.push({ text: lang === "MS" ? normalizeMs(cleaned) : cleaned, voiceName: voiceToUse, lang, resolve, reject });
     processTtsQueue();
   });
 }
@@ -192,11 +216,7 @@ function triggerDuck() {
   console.log("[DUCKING] 🔇 Muzik dikecilkan untuk AI response");
   io.emit("music:duck", {});
   setTimeout(() => {
-    if (isDucking) {
-      isDucking = false;
-      console.log("[DUCKING] 🔊 Kembalikan volume muzik");
-      io.emit("music:unduck", {});
-    }
+    if (isDucking) { isDucking = false; console.log("[DUCKING] 🔊 Kembalikan volume muzik"); io.emit("music:unduck", {}); }
   }, 8000);
 }
 
@@ -245,40 +265,27 @@ function doTikTokConnect(username: string) {
   try {
     tiktokConnectTime = Date.now();
     tiktok.connect(username, {
-      onComment: processComment,
-      onGift: processGift,
+      onComment: processComment, onGift: processGift,
       onLike: (n: number) => { likeTimes.push(Date.now()); liveStats.totalLikes += n; },
       onViewer: (v: number) => { liveStats.viewers = v; },
-      onStatus: (s) => {
-        console.log(`[TikTok] status -> ${s}`);
-        io.emit(WS_EVENTS.TIKTOK_STATUS, { status: s });
-      },
+      onStatus: (s) => { console.log(`[TikTok] status -> ${s}`); io.emit(WS_EVENTS.TIKTOK_STATUS, { status: s }); },
       onJoin: (u) => handleJoin(u),
     });
     let tries = 0;
     const poll = setInterval(() => {
       tries++;
       if (tiktok.connected) {
-        clearInterval(poll);
-        connectInFlight = false;
-        reconnectFails = 0;
-        tiktokConnectTime = Date.now();
-        songQueue = [];
-        songPlaying = false;
-        currentlyPlayingQ = "";
-        emitSongQueue();
-        io.emit("music:status", { state: "STOPPED" });
+        clearInterval(poll); connectInFlight = false; reconnectFails = 0; tiktokConnectTime = Date.now();
+        songQueue = []; songPlaying = false; currentlyPlayingQ = ""; emitSongQueue();
+        io.emit("music:status", { state: "STOPPED", url: "" });
         console.log("[TikTok] CONNECTED | backlog grace 8s + music queue cleared");
         io.emit(WS_EVENTS.TIKTOK_STATUS, { status: "CONNECTED" });
       } else if (tries > 30) {
-        clearInterval(poll);
-        connectInFlight = false;
-        reconnectFails++;
+        clearInterval(poll); connectInFlight = false; reconnectFails++;
       }
     }, 1000);
   } catch (e: any) {
-    connectInFlight = false;
-    reconnectFails++;
+    connectInFlight = false; reconnectFails++;
     console.error("[TikTok] connect error:", (e && e.message) || e);
     io.emit(WS_EVENTS.TIKTOK_STATUS, { status: "DISCONNECTED" });
   }
@@ -309,9 +316,7 @@ function startAutoTap() {
 function stopAutoTap() { if (autoTapInterval) { clearTimeout(autoTapInterval); clearInterval(autoTapInterval); autoTapInterval = null; } }
 
 function clearAllCaches() {
-  recentComments.clear();
-  recentResponses.clear();
-  recentTtsRequests.clear();
+  recentComments.clear(); recentResponses.clear(); recentTtsRequests.clear();
   Object.keys(lastCommentTime).forEach(k => delete lastCommentTime[k]);
   console.log("[CACHE] ✅ All caches cleared - fresh responses ready");
 }
@@ -327,11 +332,7 @@ function handleJoin(uname: string) {
         { role: "system", content: "Kau host TikTok Live Malaysia yang mesra. Sapa penonton baru dengan nama dia. 1 ayat pendek santai Bahasa Melayu pasar. JANGAN emoji, markdown, asterisk. Guna ya bukan ye." },
         { role: "user", content: "Penonton baru join: " + uname },
       ]);
-      // ✅ v8.62a: skip TTS kalau AI return empty
-      if (!r.content || r.content.trim().length === 0) {
-        console.log(`[GREET] ⏭️ Skip: AI return empty untuk ${uname}`);
-        return;
-      }
+      if (!r.content || r.content.trim().length === 0) { console.log(`[GREET] ⏭️ Skip: AI return empty untuk ${uname}`); return; }
       if (scriptQueue.running) { scriptQueue.addGreet(r.content, uname); }
       else {
         let g = r.content;
@@ -360,6 +361,7 @@ async function genPitch(p: any) {
   ]);
   return r.content;
 }
+
 async function emitProduct() {
   try {
     const p = await prisma.product.findFirst({ where: { isActive: true }, include: { skus: true }, orderBy: { sortOrder: "asc" } });
@@ -407,7 +409,10 @@ setInterval(async () => {
 const musicDir = path.join(process.cwd(), "audio", "music");
 const songFileCache = new Map<string, { filename: string; lastUsed: number }>();
 const failedDownloads = new Map<string, number>();
+const searchIdCache = new Map<string, { videoId: string; title: string; at: number }>();
+const inFlightDownloads = new Map<string, Promise<string | null>>();
 const cacheFile = path.join(musicDir, "cache.json");
+const searchCacheFile = path.join(musicDir, "search_cache.json");
 
 function loadCache() {
   try {
@@ -421,6 +426,13 @@ function loadCache() {
       }
       console.log(`[MUSIC] Loaded ${songFileCache.size} cached songs from disk`);
     }
+    if (fs.existsSync(searchCacheFile)) {
+      const obj = JSON.parse(fs.readFileSync(searchCacheFile, "utf8"));
+      for (const k of Object.keys(obj)) {
+        if (obj[k] && obj[k].videoId) searchIdCache.set(k, obj[k]);
+      }
+      console.log(`[MUSIC] Loaded ${searchIdCache.size} cached search IDs`);
+    }
   } catch (e) {}
 }
 function saveCache() {
@@ -428,6 +440,24 @@ function saveCache() {
     const obj: any = {};
     for (const [k, v] of songFileCache.entries()) obj[k] = v;
     fs.writeFileSync(cacheFile, JSON.stringify(obj));
+    const sObj: any = {};
+    for (const [k, v] of searchIdCache.entries()) sObj[k] = v;
+    fs.writeFileSync(searchCacheFile, JSON.stringify(sObj));
+  } catch (e) {}
+}
+
+function pruneMusicCache(maxFiles = 60) {
+  try {
+    const entries = [...songFileCache.entries()].filter(([k, v]) => fs.existsSync(path.join(musicDir, v.filename)));
+    if (entries.length <= maxFiles) return;
+    entries.sort((a, b) => (a[1].lastUsed || 0) - (b[1].lastUsed || 0));
+    const toDelete = entries.slice(0, entries.length - maxFiles);
+    for (const [k, v] of toDelete) {
+      try { fs.unlinkSync(path.join(musicDir, v.filename)); } catch (e) {}
+      songFileCache.delete(k);
+    }
+    saveCache();
+    console.log(`[MUSIC] 🧹 LRU prune: ${toDelete.length} file lama dibuang`);
   } catch (e) {}
 }
 
@@ -436,18 +466,6 @@ function songFileCacheDelete(filename: string) {
     if (v.filename === filename) songFileCache.delete(k);
   }
   saveCache();
-}
-
-function deleteCurrentMusic() {
-  if (currentMusicFile && fs.existsSync(currentMusicFile)) {
-    try {
-      const fn = path.basename(currentMusicFile);
-      fs.unlinkSync(currentMusicFile);
-      songFileCacheDelete(fn);
-      console.log(`[MUSIC] 🗑️ Padam audio selepas play: ${fn}`);
-    } catch (e) {}
-  }
-  currentMusicFile = null;
 }
 
 loadCache();
@@ -464,8 +482,89 @@ function findCachedSong(title: string): string | null {
   return null;
 }
 
-async function fetchMusic(q: string): Promise<string | null> {
-  const cleanTitle = cleanSongTitle(q);
+const YT_INNERTUBE_KEY = "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8";
+function parseDurSec(lenText: string): number {
+  const parts = String(lenText || "").trim().split(":").map((x) => parseInt(x, 10));
+  if (parts.length === 0 || parts.some((p) => isNaN(p))) return 0;
+  if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+  if (parts.length === 2) return parts[0] * 60 + parts[1];
+  return parts[0] || 0;
+}
+const BAD_TITLE_RE = /\b(compilation|cartoon|kids|for children|full episode|episode|trailer|review|reaction|tutorial|how to|live stream|streaming now)\b/i;
+function findFirstVideo(node: any): { videoId: string; title: string } | null {
+  if (!node || typeof node !== "object") return null;
+  if (typeof node.videoId === "string" && node.videoId.length === 11 && node.lengthText) {
+    const t = String(node.title?.runs?.[0]?.text || node.title?.simpleText || "");
+    const dur = parseDurSec(node.lengthText?.simpleText || node.lengthText?.runs?.[0]?.text || "");
+    if (t && dur >= 45 && dur <= 15 * 60 && !BAD_TITLE_RE.test(t)) {
+      return { videoId: node.videoId, title: t };
+    }
+  }
+  for (const k of Object.keys(node)) {
+    const r = findFirstVideo(node[k]);
+    if (r) return r;
+  }
+  return null;
+}
+async function innertubeSearch(query: string): Promise<{ videoId: string; title: string } | null> {
+  try {
+    const body = { context: { client: { clientName: "WEB", clientVersion: "2.20250101.00.00", hl: "ms", gl: "MY" } }, query, params: "EgIQAQ%3D%3D" };
+    const res = await fetch(`https://www.youtube.com/youtubei/v1/search?key=${YT_INNERTUBE_KEY}`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(4000),
+    });
+    if (!res.ok) return null;
+    const data: any = await res.json();
+    return findFirstVideo(data);
+  } catch (e) { return null; }
+}
+
+async function innertubePlayer(videoId: string): Promise<{ url: string; ext: string } | null> {
+  const clients: any[] = [
+    { clientName: "ANDROID", clientVersion: "19.09.37", androidSdkVersion: 30 },
+    { clientName: "WEB_EMBEDDED", clientVersion: "1.20250101.00.00" },
+  ];
+  for (const client of clients) {
+    try {
+      const body: any = { context: { client: { hl: "ms", gl: "MY", ...client } }, videoId };
+      const ua = client.clientName === "ANDROID" ? "com.google.android.youtube/19.09.37 (Linux; U; Android 11; en_US) gzip" : "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36";
+      const clientNum = client.clientName === "ANDROID" ? "3" : "56";
+      const res = await fetch(`https://www.youtube.com/youtubei/v1/player?key=${YT_INNERTUBE_KEY}`, {
+        method: "POST", headers: { "Content-Type": "application/json", "User-Agent": ua, "X-Youtube-Client-Name": clientNum, "X-Youtube-Client-Version": client.clientVersion },
+        body: JSON.stringify(body), signal: AbortSignal.timeout(4000),
+      });
+      if (!res.ok) continue;
+      const data: any = await res.json();
+      const fmts: any[] = data?.streamingData?.adaptiveFormats || [];
+      const withUrl = fmts.filter((f) => f && f.url && typeof f.mimeType === "string" && f.mimeType.startsWith("audio/"));
+      if (withUrl.length === 0) continue;
+      const mp4 = withUrl.filter((f) => f.mimeType.startsWith("audio/mp4")).sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
+      const pick = mp4[0] || withUrl.sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0))[0];
+      if (!pick || !pick.url) continue;
+      const ext = pick.mimeType.startsWith("audio/mp4") ? "m4a" : "webm";
+      console.log(`[MUSIC] 🎛️ innertubePlayer ok via ${client.clientName}`);
+      return { url: pick.url, ext };
+    } catch (e) { continue; }
+  }
+  return null;
+}
+
+async function downloadDirect(url: string, videoId: string, ext: string): Promise<boolean> {
+  const file = path.join(musicDir, videoId + "." + ext);
+  try {
+    const aria2 = path.join(process.cwd(), "..", "..", "tools", "aria2c.exe");
+    if (fs.existsSync(aria2)) {
+      await execFileAsync(aria2, [url, "-o", videoId + "." + ext, "-d", musicDir, "-x", "8", "-s", "8", "-k", "1M", "--console-log-level=warn", "--summary-interval=0", "--allow-overwrite=true"], { timeout: 30000 });
+    } else {
+      const res = await fetch(url, { signal: AbortSignal.timeout(30000) });
+      if (!res.ok) return false;
+      fs.writeFileSync(file, Buffer.from(await res.arrayBuffer()));
+    }
+    return fs.existsSync(file) && fs.statSync(file).size > 20000;
+  } catch (e) { return false; }
+}
+
+async function fetchMusicInner(q: string): Promise<string | null> {
+  const cleanTitle = q.trim();
   const key = cleanTitle.toLowerCase();
   const lf = failedDownloads.get(key);
   if (lf && Date.now() - lf < 60000) { console.log(`[MUSIC] ⏭️ Throttle: "${cleanTitle}"`); return null; }
@@ -476,40 +575,113 @@ async function fetchMusic(q: string): Promise<string | null> {
       if (fn.endsWith(".part") || fn.endsWith(".ytdl")) { try { fs.unlinkSync(path.join(musicDir, fn)); } catch (e) {} }
     }
   } catch (e) {}
-  await new Promise(r => setTimeout(r, 300));
   try {
     fs.mkdirSync(musicDir, { recursive: true });
-
     const before = new Map<string, number>();
-    for (const fn of fs.readdirSync(musicDir)) {
-      if (!fn.endsWith(".json")) before.set(fn, fs.statSync(path.join(musicDir, fn)).mtimeMs);
-    }
+    for (const fn of fs.readdirSync(musicDir)) { if (!fn.endsWith(".json")) before.set(fn, fs.statSync(path.join(musicDir, fn)).mtimeMs); }
 
     const isUrl = /https?:\/\//.test(q);
-    const ytdlp = fs.existsSync(path.join(process.cwd(), "..", "..", "tools", "yt-dlp.exe"))
-      ? path.join(process.cwd(), "..", "..", "tools", "yt-dlp.exe") : "yt-dlp";
+    const ytdlp = fs.existsSync(path.join(process.cwd(), "..", "..", "tools", "yt-dlp.exe")) ? path.join(process.cwd(), "..", "..", "tools", "yt-dlp.exe") : "yt-dlp";
+
+    if (!isUrl) {
+      const tFast = Date.now();
+      const hit = await innertubeSearch(cleanTitle);
+      if (hit && titleCoverage(cleanTitle, hit.title) >= 0.5) {
+        const pf = await innertubePlayer(hit.videoId);
+        if (pf) {
+          const got = await downloadDirect(pf.url, hit.videoId, pf.ext);
+          if (got) {
+            searchIdCache.set(key, { videoId: hit.videoId, title: hit.title, at: Date.now() });
+            songFileCache.set(key, { filename: hit.videoId + "." + pf.ext, lastUsed: Date.now() });
+            saveCache(); pruneMusicCache();
+            console.log(`[MUSIC] ⚡ FAST PATH direct: ${hit.videoId}.${pf.ext} dalam ${((Date.now() - tFast) / 1000).toFixed(1)}s`);
+            io.emit("music:progress", { q: cleanTitle, stage: "done", pct: 100 });
+            return "/music/" + hit.videoId + "." + pf.ext;
+          }
+        }
+      }
+      console.log(`[MUSIC] ⏱️ fast path miss - fallback yt-dlp`);
+    }
+
+    let targetUrl = isUrl ? q : "ytsearch1:" + q;
+    let usedCachedId = false;
+    let idSource: "url" | "cache" | "innertube" | "search" = isUrl ? "url" : "search";
+    const tSearch = Date.now();
+    let searchVia = "ytsearch1(yt-dlp)";
+    if (!isUrl) {
+      const cachedSearch = searchIdCache.get(key);
+      if (cachedSearch && Date.now() - cachedSearch.at < 7 * 24 * 60 * 60 * 1000) {
+        targetUrl = `https://www.youtube.com/watch?v=${cachedSearch.videoId}`;
+        usedCachedId = true; idSource = "cache"; searchVia = "cache(0s)";
+        console.log(`[MUSIC] 🔍 Search cache hit: "${cleanTitle}" → ${cachedSearch.videoId}`);
+      } else {
+        const hit = await innertubeSearch(cleanTitle);
+        if (hit && titleCoverage(cleanTitle, hit.title) >= 0.5) {
+          targetUrl = `https://www.youtube.com/watch?v=${hit.videoId}`;
+          idSource = "innertube"; searchVia = "innertube";
+          searchIdCache.set(key, { videoId: hit.videoId, title: hit.title, at: Date.now() });
+          saveCache();
+          console.log(`[MUSIC] 🔍 Innertube: "${cleanTitle}" → ${hit.videoId}`);
+        }
+      }
+    }
+    console.log(`[MUSIC] ⏱️ SEARCH ${((Date.now() - tSearch) / 1000).toFixed(1)}s via ${searchVia}`);
     console.log(`[MUSIC] Downloading: ${cleanTitle}...`);
+    io.emit("music:progress", { q: cleanTitle, stage: "downloading", pct: 0 });
 
     const cookiesPath = path.join(process.cwd(), "..", "..", "tools", "cookies.txt");
-    const args = [
-      isUrl ? q : "ytsearch1:" + q,
-      "-f", "bestaudio[ext=m4a]/bestaudio/best",
-      "-o", path.join(musicDir, "%(id)s.%(ext)s"),
-      "--no-playlist", "--quiet", "--no-warnings", "--no-cache-dir",
-      "--cookies", cookiesPath,
-      "--print", "after_move:filepath"
+    const baseArgs = [
+      "-f", "bestaudio/best", "-o", path.join(musicDir, "%(id)s.%(ext)s"),
+      "--no-playlist", "--no-warnings", "--cookies", cookiesPath, "--newline",
+      "--print", "after_move:%(id)s", "--print", "after_move:%(title)s", "--print", "after_move:%(filepath)s"
     ];
 
     const start = Date.now();
-    const { stdout } = await execFileAsync(ytdlp, args, { timeout: 30000 });
-    console.log(`[MUSIC] ✅ yt-dlp done in ${((Date.now() - start) / 1000).toFixed(1)}s`);
+    let stdout = ""; let stderr = ""; let doneOk = false; let lastErr: any = null;
 
-    let filename = "";
+    const { spawn } = await import("child_process");
+    const runDownload = (url: string, args: string[]) => new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
+      const child = spawn(ytdlp, [url, ...args], { timeout: 30000 });
+      let out = ""; let err = "";
+      const progressTimer = setInterval(() => {
+        console.log(`[MUSIC] ⏱️ ${((Date.now() - start) / 1000).toFixed(1)}s... downloading`);
+      }, 3000);
+      child.stdout.on("data", (d) => { out += d.toString(); });
+      child.stderr.on("data", (d) => { err += d.toString(); });
+      child.on("close", (code) => {
+        clearInterval(progressTimer);
+        if (code === 0) resolve({ stdout: out, stderr: err });
+        else reject(new Error(`exit ${code}: ${err}`));
+      });
+      child.on("error", (e) => { clearInterval(progressTimer); reject(e); });
+    });
+
+    try {
+      const r = await runDownload(targetUrl, baseArgs);
+      stdout = r.stdout; stderr = r.stderr; doneOk = true; lastErr = null;
+    } catch (e: any) {
+      lastErr = e;
+      if ((idSource === "cache" || idSource === "innertube") && !doneOk) {
+        searchIdCache.delete(key); saveCache(); usedCachedId = false;
+        try {
+          const r2 = await runDownload("ytsearch1:" + q, baseArgs);
+          stdout = r2.stdout; stderr = r2.stderr; doneOk = true; lastErr = null;
+          console.log(`[MUSIC] ✅ Recovered via ytsearch1`);
+        } catch (e2: any) { lastErr = e2; }
+      }
+    }
+
+    if (!doneOk) throw lastErr || new Error("download failed");
+
+    console.log(`[MUSIC] ✅ yt-dlp done in ${((Date.now() - start) / 1000).toFixed(1)}s`);
+    io.emit("music:progress", { q: cleanTitle, stage: "done", pct: 100 });
+
+    let filename = ""; let dlTitle = ""; let videoId = "";
     const lines = (stdout || "").trim().split(/\r?\n/).filter(Boolean);
     for (let i = lines.length - 1; i >= 0; i--) {
       const p = lines[i].trim();
       if (p && fs.existsSync(p) && path.resolve(path.dirname(p)) === path.resolve(musicDir)) {
-        filename = path.basename(p);
+        filename = path.basename(p); dlTitle = (lines[i - 1] || "").trim(); videoId = (lines[i - 2] || "").trim();
         break;
       }
     }
@@ -522,24 +694,58 @@ async function fetchMusic(q: string): Promise<string | null> {
       }
     }
 
-    if (filename) {
-      songFileCache.set(key, { filename, lastUsed: Date.now() });
+    if (!isUrl && videoId && videoId.length === 11) {
+      searchIdCache.set(key, { videoId, title: dlTitle, at: Date.now() });
       saveCache();
-      console.log(`[MUSIC] 🎵 File tepat: ${filename}`);
+    }
+
+    if (filename && !isUrl && dlTitle && !usedCachedId) {
+      const cov = titleCoverage(cleanTitle, dlTitle);
+      if (cov < 0.6) {
+        try { fs.unlinkSync(path.join(musicDir, filename)); } catch (e) {}
+        failedDownloads.set(key, Date.now());
+        return null;
+      }
+    }
+
+    if (filename) {
+      const fsize = fs.statSync(path.join(musicDir, filename)).size;
+      songFileCache.set(key, { filename, lastUsed: Date.now() });
+      saveCache(); pruneMusicCache();
+      console.log(`[MUSIC] 🎵 File: ${filename} (${(fsize / 1024 / 1024).toFixed(1)}MB)`);
       return "/music/" + filename;
     }
-    console.error(`[MUSIC] ❌ No new file for "${cleanTitle}" - tak main lagu salah`);
     failedDownloads.set(key, Date.now());
     return null;
   } catch (e: any) {
-    const errMsg = (e.message || "").split("\n").slice(0, 5).join("\n  ");
-    const errOut = ((e.stderr || "").toString()).split("\n").filter(Boolean).slice(0, 3).join(" | ");
-    console.error(`[MUSIC] ❌ Failed "${cleanTitle}":`);
-    console.error(`  ${errMsg}`);
-    if (errOut) console.error(`  stderr: ${errOut}`);
+    console.error(`[MUSIC] ❌ Failed "${cleanTitle}":`, (e.message || "").split("\n").slice(0, 3).join("\n  "));
     failedDownloads.set(key, Date.now());
     return null;
   }
+}
+
+function fetchMusic(q: string): Promise<string | null> {
+  const key = q.trim().toLowerCase();
+  const existing = inFlightDownloads.get(key);
+  if (existing) return existing;
+  const p = fetchMusicInner(q).finally(() => { inFlightDownloads.delete(key); });
+  inFlightDownloads.set(key, p);
+  return p;
+}
+
+const TOP_HITS_WARMUP = ["Siti Nurhaliza", "Yuna", "Sheila On 7", "Adele", "Ed Sheeran"];
+async function warmupCache() {
+  console.log("[CACHE WARMUP] 🚀 Downloading top hits silently...");
+  let success = 0;
+  for (const q of TOP_HITS_WARMUP) {
+    try {
+      if (findCachedSong(q)) { success++; continue; }
+      const url = await fetchMusicInner(q);
+      if (url) success++;
+      await new Promise(r => setTimeout(r, 500));
+    } catch (e) {}
+  }
+  console.log(`[CACHE WARMUP] ✅ Done: ${success}/${TOP_HITS_WARMUP.length} top hits ready`);
 }
 
 let lastSong = 0;
@@ -550,9 +756,8 @@ function emitSongQueue() { io.emit("music:queue", songQueue); }
 
 function skipCurrentSong() {
   if (!songPlaying && songQueue.length === 0) return;
-  deleteCurrentMusic();
-  songPlaying = false; currentlyPlayingQ = "";
-  io.emit("music:status", { state: "SKIPPED" });
+  currentMusicFile = null; songPlaying = false; currentlyPlayingQ = "";
+  io.emit("music:status", { state: "SKIPPED", url: "" });
   if (songQueue.length > 0) setTimeout(() => void playNextInQueue(), 300);
 }
 
@@ -560,9 +765,7 @@ async function playNextInQueue() {
   if (songPlaying || songQueue.length === 0) return;
   const next = songQueue.shift();
   if (!next) return;
-  songPlaying = true;
-  currentlyPlayingQ = next.q;
-  emitSongQueue();
+  songPlaying = true; currentlyPlayingQ = next.q; emitSongQueue();
   console.log(`[MUSIC] Now playing: ${next.q} (requested by ${next.by})`);
   const sink = audioSink ? audioSink.id : null;
   io.emit("music:status", { state: "FETCHING", q: next.q, audioFor: sink });
@@ -573,24 +776,20 @@ async function playNextInQueue() {
     if (!sink) console.log("[MUSIC] ⚠️ TIADA audio sink! Lagu tak akan berbunyi - buka dashboard & klik SPEAKER");
     io.emit("music:status", { state: "PLAYING", q: next.q, url: "http://localhost:4000" + url, audioFor: sink, requestedBy: next.by });
   } else {
-    io.emit("music:status", { state: "FAILED", q: next.q, audioFor: sink });
+    io.emit("music:status", { state: "FAILED", q: next.q, url: "", audioFor: sink });
     songPlaying = false; currentlyPlayingQ = "";
     setTimeout(() => void playNextInQueue(), 2000);
   }
 }
 
-async function enqueueSong(q: string, by: string) {
-  const cleanQ = cleanSongTitle(q);
-  if (!cleanQ || cleanQ.length < 2) return;
+async function enqueueSong(rawQ: string, by: string) {
+  const cleanQ = sanitizeSongQuery(rawQ, by === "host" ? "" : by);
+  if (!cleanQ || cleanQ.length < 2) { console.log(`[MUSIC] ⚠️ Query kosong selepas sanitize: "${rawQ}"`); return; }
   const keyLower = cleanQ.toLowerCase();
   if (currentlyPlayingQ && currentlyPlayingQ.toLowerCase() === keyLower) {
     console.log(`[MUSIC] 🔄 Replay: "${cleanQ}" (restart dari awal)`);
     if (currentMusicFile && fs.existsSync(currentMusicFile)) {
-      io.emit("music:status", {
-        state: "PLAYING", q: cleanQ,
-        url: "http://localhost:4000/music/" + path.basename(currentMusicFile),
-        audioFor: audioSink ? audioSink.id : null, requestedBy: by, replay: true
-      });
+      io.emit("music:status", { state: "PLAYING", q: cleanQ, url: "http://localhost:4000/music/" + path.basename(currentMusicFile), audioFor: audioSink ? audioSink.id : null, requestedBy: by, replay: true });
     }
     return;
   }
@@ -599,15 +798,22 @@ async function enqueueSong(q: string, by: string) {
   songQueue.push({ q: cleanQ, by });
   emitSongQueue();
   console.log(`[MUSIC] Queued: "${cleanQ}" by ${by}. Size: ${songQueue.length}`);
+  if (songPlaying && songQueue.length > 0) {
+    const nxt = songQueue[0];
+    console.log(`[MUSIC] 🚀 Prefetch background: "${nxt.q}"`);
+    void fetchMusic(nxt.q).catch(() => {});
+  }
   if (!songPlaying) void playNextInQueue();
 }
 
+// 🔥 FIX: split("?")[0] untuk buang cache buster sebelum cari fail
 httpServer.on("request", (req, res) => {
   const serve = (dir: string) => {
-    const file = path.join(dir, path.basename(req.url || ""));
+    const urlPath = (req.url || "").split("?")[0];
+    const file = path.join(dir, path.basename(urlPath));
     if (fs.existsSync(file)) {
       const ext = path.extname(file).toLowerCase();
-      const mime = ext === ".webm" ? "audio/webm" : ext === ".m4a" ? "audio/mp4" : ext === ".opus" ? "audio/opus" : "audio/mpeg";
+      const mime = ext === ".webm" ? "audio/webm" : ext === ".m4a" ? "audio/mp4" : ext === ".opus" ? "audio/opus" : ext === ".mp3" ? "audio/mpeg" : ext === ".txt" ? "text/plain" : "audio/mpeg";
       const stat = fs.statSync(file);
       const range = req.headers.range;
       if (range) {
@@ -649,10 +855,9 @@ function isValidSongTitle(t: string): boolean {
 
 function sanitizeForRegularMode(text: string): string {
   let c = text;
-  const pats = [/tekan beg kuning/gi, /beg kuning/gi, /beg hijau/gi, /keranjang kuning/gi, /jualan/gi, /jual\b/gi, /produk/gi, /beli\b/gi, /membeli/gi, /order\b/gi, /shopping/gi, /checkout/gi, /promo/gi, /diskaun/gi, /harga/gi, /stok/gi, /beg\b/gi, /cart\b/gi, /troli/gi, /kod\s+\w+/gi, /baucar/gi, /voucher/gi, /flash\s+sale/gi, /sale\b/gi];
+  const pats = [/tekan beg kuning/gi, /beg kuning/gi, /beg hijau/gi, /keranjang kuning/gi, /jualan/gi, /jual\b/gi, /produk/gi, /beli\b/gi, /membeli/gi, /order\b/gi, /shopping/gi, /checkout/gi, /promo/gi, /diskaun/gi, /harga/gi, /stok/gi, /beg\b/gi, /cart\b/gi, /troli/gi, /kod\s+\w+/gi, /baucar/gi, /voucher/gi, /flash\s*sale/gi, /sale\b/gi];
   for (const p of pats) c = c.replace(p, "");
   c = c.replace(/\s+/g, " ").replace(/\s+([,.!?])/g, "$1").replace(/^[\s,.!?]+/, "").trim();
-  // ✅ v8.62a: return kosong instead of default message - biarkan caller decide
   if (!c || c.length < 8) return "";
   return c;
 }
@@ -676,65 +881,65 @@ async function processComment(username: string, text: string) {
     io.emit(WS_EVENTS.COMMENT_LOG, { username, text });
 
     const expandedText = expandTikTokSlang(text);
-    if (expandedText !== text) {
-      console.log(`[SLANG] 🔄 "${text}" → "${expandedText}"`);
-    }
-    const aiText = (expandedText === expandedText.toUpperCase() && expandedText.length > 4)
-      ? expandedText.toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase())
-      : expandedText;
+    if (expandedText !== text) { console.log(`[SLANG] 🔄 "${text}" → "${expandedText}"`); }
+    const aiText = (expandedText === expandedText.toUpperCase() && expandedText.length > 4) ? expandedText.toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase()) : expandedText;
     const aiInput = expandedText !== text ? `${TIKTOK_MY_CONTEXT}\nKomen penonton: ${aiText}` : aiText;
-
     const lower = aiText.toLowerCase().trim();
-    const skipPat = /^(skip|cancel|taknak|tak nak|next|stop lagu|batal|batal kan|next song|skip lagu)$/i;
-    if (skipPat.test(lower) || lower.includes("skip") || lower.includes("cancel lagu")) {
-      if (songPlaying || songQueue.length > 0) {
-        const msg = `Ok ${ttsNormalize(username)}, lagu di-skip!`;
-        const audioUrl = await speakMixed(msg, "MS");
-        if (audioUrl) emitResponse({ type: "SKIP_CONFIRM", content: msg, targetUser: username, audioUrl });
-        skipCurrentSong();
-        return;
-      }
-    }
 
-    let handledByMusic = false;
-    const nowS = Date.now();
-    const strongReq = /\b(mainkan|play|pasang|putar|nyanyi|request|req)\b/i;
-    const softReq = /\b(minta|nak|bagi|boleh)\s+lagu\b/i;
-    const directReq = /\blagu\s+[a-zA-Z0-9]/i;
-    const isReq = strongReq.test(aiText) || softReq.test(aiText) || directReq.test(aiText);
-    if (isReq) console.log(`[MUSIC] 🎯 Request pattern match: "${aiText}"`);
-    if (nowS - lastSong > 10000 && isReq) {
-      lastSong = nowS;
-      let q = "";
-      try {
-        const r = await routeAIRequest("SONG_EXTRACT", [
-          { role: "system", content: "Ekstrak tajuk lagu daripada komen penonton. Jawab DENGAN tajuk lagu sahaja (serta artis jika disebut). Tiada ayat lain, tiada tanda petik. Jika TIADA tajuk lagu spesifik disebut, jawab tepat: NONE" },
-          { role: "user", content: aiText }]);
-        q = cleanSongTitle(r.content);
-        console.log("[MUSIC] AI extracted:", JSON.stringify(q));
-      } catch (e) {}
-      if (!q || q === "NONE") {
-        const mRule = aiText.match(/\blagu\s+([a-zA-Z0-9][a-zA-Z0-9\s'&.-]{2,})/i);
-        if (mRule) {
-          const cand = cleanSongTitle(mRule[1]);
-          if (cand && isValidSongTitle(cand)) {
-            q = cand;
-            console.log("[MUSIC] 📏 Rule fallback extracted:", JSON.stringify(q));
-          }
+    const soalanPat = /\b(apa|siapa|kenapa|bila|tajuk|nama|artis)\b.{0,15}\b(lagu|nyanyi|singer|artist)\b|\b(lagu)\b.{0,15}\b(apa|siapa|kenapa|bila|tajuk|nama)\b/i;
+    if (soalanPat.test(lower)) {
+      console.log(`[MUSIC] ❓ Soalan dikesan (skip queue): "${aiText.slice(0, 50)}"`);
+    } else {
+      const skipPat = /^(skip|cancel|taknak|tak nak|next|stop lagu|batal|batal kan|next song|skip lagu)$/i;
+      if (skipPat.test(lower) || lower.includes("skip") || lower.includes("cancel lagu")) {
+        if (songPlaying || songQueue.length > 0) {
+          const msg = `Ok ${ttsNormalize(username)}, lagu di-skip!`;
+          const audioUrl = await speakMixed(msg, "MS");
+          if (audioUrl) emitResponse({ type: "SKIP_CONFIRM", content: msg, targetUser: username, audioUrl });
+          skipCurrentSong();
+          return;
         }
       }
-      if (q && q !== "NONE" && q.length >= 2 && isValidSongTitle(q)) {
-        handledByMusic = true;
-        enqueueSong(q, username);
-        const msg = `Ok ${ttsNormalize(username)}, lagu ${q} masuk queue!`;
-        const audioUrl = await speakMixed(msg, "MS");
-        if (audioUrl) emitResponse({ type: "SONG_CONFIRM", content: msg, targetUser: username, audioUrl });
+
+      let handledByMusic = false;
+      const nowS = Date.now();
+      const strongReq = /\b(mainkan|play|pasang|putar|nyanyi|request|req)\b/i;
+      const softReq = /\b(minta|nak|bagi|boleh)\s+lagu\b/i;
+      const directReq = /\blagu\s+[a-zA-Z0-9]/i;
+      const isReq = strongReq.test(aiText) || softReq.test(aiText) || directReq.test(aiText);
+      if (isReq) console.log(`[MUSIC] 🎯 Request pattern match: "${aiText}"`);
+      if (nowS - lastSong > 10000 && isReq) {
+        lastSong = nowS;
+        let q = "";
+        try {
+          const r = await routeAIRequest("SONG_EXTRACT", [
+            { role: "system", content: "Ekstrak tajuk lagu daripada komen penonton. Jawab DENGAN tajuk lagu sahaja (serta artis jika disebut). Tiada ayat lain, tiada tanda petik. Jika TIADA tajuk lagu spesifik disebut, jawab tepat: NONE" },
+            { role: "user", content: aiText }
+          ]);
+          q = String(r.content || "").replace(/^["'""''\s]+|["'""''\s]+$/g, "").replace(/\s+/g, " ").trim();
+          console.log("[MUSIC] AI extracted:", JSON.stringify(q));
+        } catch (e) {}
+        if (!q || q === "NONE") {
+          const mRule = aiText.match(/\blagu\s+([a-zA-Z0-9][a-zA-Z0-9\s'&.-]{2,})/i);
+          if (mRule) {
+            const cand = mRule[1].replace(/\s+/g, " ").trim();
+            if (cand && cand.length >= 3) { q = cand; console.log("[MUSIC] ⚙️ Rule fallback extracted:", JSON.stringify(q)); }
+          }
+        }
+        q = sanitizeSongQuery(q, username);
+        if (q && q !== "NONE" && q.length >= 2 && isValidSongTitle(q)) {
+          handledByMusic = true;
+          enqueueSong(q, username);
+          const msg = `Ok ${ttsNormalize(username)}, lagu ${q} masuk queue!`;
+          const audioUrl = await speakMixed(msg, "MS");
+          if (audioUrl) emitResponse({ type: "SONG_CONFIRM", content: msg, targetUser: username, audioUrl });
+        }
       }
     }
 
     const simple = /^(haha+|hehe+|hihi+|lol|lmao|ok|okay|yes|no|ya|tak|yeap|yup|nice|good|best|mantap|power|ngam+)$/i;
     if (simple.test(aiText.trim())) return;
-    if (handledByMusic) return;
+    if ((lower.indexOf("skip") >= 0 || lower.includes("cancel lagu")) && (songPlaying || songQueue.length > 0)) return;
 
     const commentLang = detectLang(aiText);
     const { response, violations, approvalRequest } = await engine.handleComment(session.id, username, aiInput);
@@ -749,17 +954,14 @@ async function processComment(username: string, text: string) {
           try {
             const r = await routeAIRequest("CHITCHAT", [
               { role: "system", content: "You are a friendly Malaysian TikTok Live host. Reply in NATURAL ENGLISH ONLY. 1-2 short sentences. No Malay words. No emoji, no markdown." },
-              { role: "user", content: aiText }]);
+              { role: "user", content: aiText }
+            ]);
             clean = r.content;
           } catch (e) {}
         }
       }
       if (currentMode === "REGULAR") clean = sanitizeForRegularMode(clean);
-      // ✅ v8.62a: skip TTS kalau response kosong (AI gagal atau sanitize buang semua)
-      if (!clean || clean.trim().length === 0) {
-        console.log(`[COMMENT] ⏭️ Skip TTS: response kosong untuk "${aiText.slice(0, 40)}"`);
-        return;
-      }
+      if (!clean || clean.trim().length === 0) { console.log(`[COMMENT] ⏭️ Skip TTS: response kosong untuk "${aiText.slice(0, 40)}"`); return; }
       if (isDuplicateResponse(clean)) return;
       if (currentMode === "SHOPPABLE" && scriptQueue.running) scriptQueue.addResponse(clean, username + ": " + text);
       else {
@@ -782,17 +984,14 @@ async function processGift(username: string, giftName: string, giftValue: number
     io.emit("gift:visual", { username, giftName, giftValue });
     let reaction = await engine.handleGift(session.id, username, giftName, giftValue);
     if (currentMode === "REGULAR") reaction = sanitizeForRegularMode(reaction);
-    // ✅ v8.62a: skip TTS kalau reaction kosong
-    if (!reaction || reaction.trim().length === 0) {
-      console.log(`[GIFT] ⏭️ Skip TTS: reaction kosong untuk ${giftName} dari ${username}`);
-      return;
-    }
+    if (!reaction || reaction.trim().length === 0) { console.log(`[GIFT] ⏭️ Skip TTS: reaction kosong untuk ${giftName} dari ${username}`); return; }
     if (isDuplicateResponse(reaction)) return;
     const audioUrl = await speakMixed(reaction);
     if (audioUrl) emitResponse({ type: "GIFT_REACTION", content: reaction, targetUser: username, audioUrl });
   } catch (e) {}
 }
 
+let lastReconnectAttempt = 0;
 setInterval(() => {
   if (!lastTikTokUser || tiktok.connected || connectInFlight) return;
   if (reconnectFails > 40) {
@@ -800,10 +999,14 @@ setInterval(() => {
     lastTikTokUser = null;
     return;
   }
-  console.log(`[TikTok] 🔄 Auto-reconnect (fails=${reconnectFails}): sambung semula ${lastTikTokUser}...`);
+  const now = Date.now();
+  const interval = reconnectFails < 3 ? 15000 : reconnectFails < 10 ? 30000 : 60000;
+  if (now - lastReconnectAttempt < interval) return;
+  lastReconnectAttempt = now;
+  console.log(`[TikTok] 🔄 Auto-reconnect (fails=${reconnectFails}, interval=${interval/1000}s): sambung semula ${lastTikTokUser}...`);
   io.emit(WS_EVENTS.TIKTOK_STATUS, { status: "RECONNECTING..." });
   doTikTokConnect(lastTikTokUser);
-}, 15000);
+}, 5000);
 
 if (lastTikTokUser) {
   setTimeout(() => {
@@ -813,6 +1016,8 @@ if (lastTikTokUser) {
     }
   }, 8000);
 }
+
+setTimeout(() => void warmupCache(), 10000);
 
 io.on("connection", (socket) => {
   console.log("[WS] client connected:", socket.id);
@@ -839,20 +1044,17 @@ io.on("connection", (socket) => {
   const onComment = (data: { username: string; text: string }) => processComment(data.username, data.text);
   socket.on(WS_EVENTS.COMMENT_RECEIVED, onComment);
   if ((WS_EVENTS as any).COMMENT_RECEIVED !== "COMMENT_RECEIVED") socket.on("COMMENT_RECEIVED", onComment);
-
   socket.on(WS_EVENTS.GIFT_RECEIVED, (data: { username: string; giftName: string; giftValue: number }) => processGift(data.username, data.giftName, data.giftValue));
 
   socket.on(WS_EVENTS.TIKTOK_CONNECT, (data: { username: string }) => {
     const uname = String((data && data.username) || "").replace("@", "").trim();
     if (!uname) return;
-    lastTikTokUser = uname;
-    reconnectFails = 0;
+    lastTikTokUser = uname; reconnectFails = 0;
     try { fs.writeFileSync(lastUserFile, uname); } catch (e) {}
     doTikTokConnect(uname);
   });
   socket.on(WS_EVENTS.TIKTOK_DISCONNECT, () => {
-    lastTikTokUser = null;
-    reconnectFails = 0;
+    lastTikTokUser = null; reconnectFails = 0;
     try { fs.unlinkSync(lastUserFile); } catch (e) {}
     tiktok.disconnect();
     io.emit(WS_EVENTS.TIKTOK_STATUS, { status: "DISCONNECTED" });
@@ -877,18 +1079,13 @@ io.on("connection", (socket) => {
   socket.on("shop:settings", (d: any) => scriptQueue.setSettings(d || {}));
   socket.on("shop:interject", (d: any) => { if (d && d.text) scriptQueue.addPitch(String(d.text).trim()); });
   socket.on("test:join", () => handleJoin("abam_test_join"));
-
-  socket.on("cache:clear", () => {
-    clearAllCaches();
-    socket.emit("cache:cleared", { ok: true });
-  });
+  socket.on("cache:clear", () => { clearAllCaches(); socket.emit("cache:cleared", { ok: true }); });
 
   socket.on("music:started", (d: any) => {
     songPlaying = true;
     currentlyPlayingQ = String(d?.q || "").toLowerCase();
     console.log("[MUSIC] sync frontend playing:", currentlyPlayingQ);
   });
-
   socket.on("music:tick", (d: any) => io.emit("music:tick", d));
   socket.on("lyrics:offset", (d: any) => io.emit("lyrics:offset", d));
 
@@ -896,36 +1093,24 @@ io.on("connection", (socket) => {
   socket.on("music:skip", () => skipCurrentSong());
   socket.on("music:stop", () => {
     console.log("[MUSIC] Stop received - hentikan serta-merta");
-    deleteCurrentMusic();
-    songPlaying = false; currentlyPlayingQ = "";
+    currentMusicFile = null; songPlaying = false; currentlyPlayingQ = "";
     emitSongQueue();
-    io.emit("music:status", { state: "STOPPED" });
+    io.emit("music:status", { state: "STOPPED", url: "" });
     if (songQueue.length > 0) setTimeout(() => void playNextInQueue(), 500);
     else console.log("[MUSIC] Stop: queue kosong, tak auto-play");
   });
-  socket.on("music:pause", () => {
-    console.log("[MUSIC] ⏸️ Pause received");
-    songPlaying = false;
-    io.emit("music:status", { state: "PAUSED" });
-  });
+  socket.on("music:pause", () => { console.log("[MUSIC] ⏸️ Pause received"); songPlaying = false; io.emit("music:status", { state: "PAUSED" }); });
   socket.on("music:resume", () => {
     console.log("[MUSIC] ▶️ Resume received");
-    if (currentMusicFile && fs.existsSync(currentMusicFile)) {
-      songPlaying = true;
-      io.emit("music:status", { state: "RESUMED" });
-    }
+    if (currentMusicFile && fs.existsSync(currentMusicFile)) { songPlaying = true; io.emit("music:status", { state: "RESUMED" }); }
   });
   socket.on("music:volume", (d: any) => { musicVolume = Math.max(0, Math.min(1, Number(d.vol) || 1)); io.emit("music:status", { state: "VOLUME", vol: musicVolume }); });
   socket.on("music:duck", () => io.emit("music:volume", { vol: 0.3 }));
   socket.on("music:unduck", () => io.emit("music:volume", { vol: musicVolume }));
   socket.on("music:ended", () => {
     if (!songPlaying) return;
-    deleteCurrentMusic();
-    songPlaying = false; currentlyPlayingQ = "";
-    if (songQueue.length === 0) {
-      io.emit("music:status", { state: "STOPPED" });
-      console.log("[MUSIC] 🏁 Lagu tamat - emit STOPPED untuk lyrics overlay");
-    }
+    currentMusicFile = null; songPlaying = false; currentlyPlayingQ = "";
+    if (songQueue.length === 0) { io.emit("music:status", { state: "STOPPED", url: "" }); console.log("[MUSIC] 🏁 Lagu tamat - emit STOPPED untuk lyrics overlay"); }
     setTimeout(() => void playNextInQueue(), 500);
   });
 

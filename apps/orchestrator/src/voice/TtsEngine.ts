@@ -161,7 +161,8 @@ export class TtsEngine {
     if (!this.instances[voice]) {
       const mod: any = await import("node-edge-tts");
       const EdgeTTS = mod.EdgeTTS || (mod.default && mod.default.EdgeTTS) || mod.default;
-      this.instances[voice] = new EdgeTTS({ voice, timeout: 10000 });
+      // 🔥 Timeout dipendekkan dari 10s ke 6s - supaya fail cepat dan trigger fallback
+      this.instances[voice] = new EdgeTTS({ voice, timeout: 6000 });
     }
     return this.instances[voice];
   }
@@ -220,6 +221,35 @@ export class TtsEngine {
       }
     } catch (e: any) {
       console.error("[TTS] ❌ speak error:", e.message);
+      
+      // 🔥 INSTANT FALLBACK: Bila Edge TTS kena 403/429, TERUS guna Google TTS
+      // TANPA retry loop - ini yang buat latency 9244ms sebelum ni
+      if (e.message.includes("403") || e.message.includes("429")) {
+        console.log("[TTS] ⚠️ Edge TTS blocked (403/429). INSTANT fallback to Google TTS...");
+        try {
+          const langCode = this.voice.startsWith("ms") ? "ms-MY" : "en-US";
+          const url = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(clean)}&tl=${langCode}&client=tw-ob`;
+          const res = await fetch(url, {
+            headers: { 
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+              'Accept': 'audio/*',
+              'Referer': 'https://translate.google.com/'
+            }
+          });
+          
+          if (res.ok) {
+            const buf = Buffer.from(await res.arrayBuffer());
+            if (buf.length > 100) {
+              fs.writeFileSync(file, buf);
+              console.log("[TTS] ✅ Google TTS backup success! (No dead air, instant fallback)");
+              return "http://localhost:4000/audio/" + id + ".mp3";
+            }
+          }
+        } catch (backupErr) {
+          console.error("[TTS] ❌ Google TTS backup also failed:", backupErr);
+        }
+      }
+      
       this.instances[voice] = null;
       return null;
     }
